@@ -180,11 +180,98 @@ Intake (completeness check)
 ## 8. Status
 
 - [x] Scenario defined
-- [ ] Vector store & policy documents authored
-- [ ] Mock data sources (vendor DB, watchlist)
-- [ ] LangGraph state schema implemented
-- [ ] Nodes & routing implemented
-- [ ] Tools implemented
-- [ ] Streamlit interface
-- [ ] Test scenarios verified
+- [x] Vector store & policy documents authored
+- [x] Mock data sources (vendor DB, watchlist)
+- [x] LangGraph state schema implemented
+- [x] Nodes & routing implemented
+- [x] Tools implemented
+- [x] Streamlit interface
+- [x] Test scenarios verified
 - [ ] Presentation materials
+
+---
+
+## 9. Setup & running
+
+Requires **Python 3.11+**.
+
+```bash
+# 1. Create a virtualenv and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. (Optional) configure an LLM provider — works without one, reasoning
+#    text just falls back to deterministic templates.
+#    Default provider is Amazon Bedrock (set BEDROCK_MODEL_ID, AWS_REGION,
+#    and credentials via the standard AWS chain); OpenAI/Anthropic keys are
+#    used as fallbacks.
+cp .env.example .env        # then fill in the provider you plan to use
+
+# 3. Run the demo UI
+streamlit run app.py
+```
+
+On first run the app seeds the mock vendor DB + watchlist into
+`data/vendor_onboarding.db` and indexes the policy docs into
+`data/chroma/` automatically.
+
+**Run the test suite** (the 5 required scenarios + routing extras):
+
+```bash
+pytest tests/ -v
+```
+
+### Project layout
+
+```
+models.py          Pydantic models (VendorRequest, WorkflowState, enums, risk rubric)
+schema.sql / db.py Mocked SQLite persistence (vendors, watchlist, approvals, status log)
+seeders.py         Mock vendor master + sanctions watchlist data
+policy_docs/       6 authored policy documents (RAG source material)
+ingestion.py       Chunking + Chroma ingestion, metadata-filtered retrieval
+embeddings.py      Local deterministic embedding model
+tools.py           The 6 tools (4 read-only, 2 mocked side-effects)
+llm.py             Model-agnostic LLM client (Amazon Bedrock -> OpenAI -> Anthropic)
+graph/nodes.py     The three agents + human gate as LangGraph nodes
+graph/workflow.py  Graph wiring, routing, interrupt-aware run helpers
+app.py             Streamlit UI
+tests/             pytest scenarios
+```
+
+### Demo scenarios
+
+| # | Scenario | Submit in the UI |
+|---|---|---|
+| 1 | Happy path (auto-completes) | **Staple Supply Co.**, Office Supplies, US, existing, all 4 base docs |
+| 2 | Branching → human gate | **Acme Cloud Services**, IT/Software, US, new, all 4 base docs + security questionnaire |
+| 3 | Missing info pause | Same as #1 but without the Certificate of Insurance |
+| 4 | Revision loop | **Firstline Facilities GmbH**, Facilities, Germany, existing, all 4 base docs |
+| 5 | Escalation → human gate | **Helios Data Partners**, IT/Software, Germany, data-sensitive, new, base docs only (add security questionnaire when asked) |
+| bonus | Watchlist → escalate | **Blackrock Shipping LLC**, any category, complete docs |
+
+### Assumptions & deviations
+
+- **Deterministic planner/reviewer.** Decisions are rule-based so the 5 scenarios
+  pass without an API key and are repeatable in the demo. The LLM (when a key
+  is set) only generates `reasoning`/`feedback` prose; templates are used as a
+  fallback.
+- **Mandatory IT/data-sensitive gate.** Per the authored policy, *any*
+  IT/Software or data-sensitive vendor requires human sign-off regardless of
+  risk score — this is what makes scenario 2 route visibly differently.
+- **Scenario 5's missing security questionnaire first pauses intake** (it is a
+  required document); once supplied, escalation comes from the residual
+  foreign + new-data-sensitive profile (score ≥ 30). The "no security
+  questionnaire" criterion therefore shows up as the intake pause, not as a
+  reviewer flag for this specific case.
+- **Planner blind spot drives the revision loop.** The planner (first pass)
+  drafts `high_risk` whenever any risk flag exists and does not consult the
+  watchlist (that is the reviewer's check). The reviewer re-tiers with the
+  full rubric, producing the deterministic revise-then-approve path.
+- **Vendor DB is authoritative** for prior-relationship when a record exists;
+  otherwise the requester's claim is used.
+- **Embeds use a local deterministic bag-of-words model** (no network/model
+  download). Swap `embeddings.embed` for sentence-transformers if desired —
+  no other module changes.
+- **Side-effects are fully mocked** — approvals and status writes go only to
+  local SQLite. Nothing external is ever called.
