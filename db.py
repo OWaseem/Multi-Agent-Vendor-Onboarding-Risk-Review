@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 DB_PATH = Path(
@@ -37,3 +38,17 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
     conn = conn or get_connection()
     conn.executescript(SCHEMA_PATH.read_text())
     conn.commit()
+
+
+@contextmanager
+def connection():
+    """Yield a short-lived connection for a single call site, closing it on exit.
+
+    Use this (rather than ``get_connection`` directly) anywhere a connection is
+    opened, used once, and discarded — avoids leaking a connection per call.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()

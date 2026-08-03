@@ -299,6 +299,7 @@ class WorkflowState(BaseModel):
     human_decision: Optional[HumanDecision] = None
     final_status: Optional[OnboardingStatus] = None
     pending_approval_id: Optional[int] = None  # row id in approval_requests
+    final_summary: Optional[str] = None  # plain-language wrap-up of the whole run
 
     # --- observability ---
     workflow_trace: list[str] = Field(default_factory=list)  # ordered node visits

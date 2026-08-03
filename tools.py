@@ -29,29 +29,29 @@ from models import (
 
 def vendor_lookup(vendor_name: str) -> dict[str, Any] | None:
     """Look up a vendor in the mock vendor master DB (case-insensitive)."""
-    conn = db.get_connection()
-    row = conn.execute(
-        "SELECT * FROM vendors WHERE lower(name) = lower(?)", (vendor_name,)
-    ).fetchone()
-    if row is None:
-        return None
-    return {
-        "name": row["name"],
-        "category": row["category"],
-        "country": row["country"],
-        "prior_relationship": bool(row["prior_relationship"]),
-        "certifications": row["certifications"],
-    }
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM vendors WHERE lower(name) = lower(?)", (vendor_name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "name": row["name"],
+            "category": row["category"],
+            "country": row["country"],
+            "prior_relationship": bool(row["prior_relationship"]),
+            "certifications": row["certifications"],
+        }
 
 
 def watchlist_check(vendor_name: str) -> list[dict[str, Any]]:
     """Check the mock sanctions/watchlist table (case-insensitive partial match)."""
-    conn = db.get_connection()
-    rows = conn.execute(
-        "SELECT name, reason, added_at FROM watchlist WHERE lower(name) LIKE lower(?)",
-        (f"%{vendor_name}%",),
-    ).fetchall()
-    return [dict(r) for r in rows]
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT name, reason, added_at FROM watchlist WHERE lower(name) LIKE lower(?)",
+            (f"%{vendor_name}%",),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def policy_retriever(
@@ -82,14 +82,14 @@ def create_approval_request(
     request_id: str, vendor_name: str, decision_notes: str | None = None
 ) -> int:
     """Log a pending approval record; returns the new row id."""
-    conn = db.get_connection()
-    cur = conn.execute(
-        "INSERT INTO approval_requests (request_id, vendor_name, status, decision_notes)"
-        " VALUES (?, ?, 'pending', ?)",
-        (request_id, vendor_name, decision_notes),
-    )
-    conn.commit()
-    return cur.lastrowid
+    with db.connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO approval_requests (request_id, vendor_name, status, decision_notes)"
+            " VALUES (?, ?, 'pending', ?)",
+            (request_id, vendor_name, decision_notes),
+        )
+        conn.commit()
+        return cur.lastrowid
 
 
 def update_vendor_status(
@@ -99,14 +99,14 @@ def update_vendor_status(
     notes: str | None = None,
 ) -> int:
     """Write the final onboarding status to the log; returns the new row id."""
-    conn = db.get_connection()
-    cur = conn.execute(
-        "INSERT INTO vendor_status_log (request_id, vendor_name, final_status, notes)"
-        " VALUES (?, ?, ?, ?)",
-        (request_id, vendor_name, final_status.value, notes),
-    )
-    conn.commit()
-    return cur.lastrowid
+    with db.connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO vendor_status_log (request_id, vendor_name, final_status, notes)"
+            " VALUES (?, ?, ?, ?)",
+            (request_id, vendor_name, final_status.value, notes),
+        )
+        conn.commit()
+        return cur.lastrowid
 
 
 def resolve_approval(
@@ -116,13 +116,13 @@ def resolve_approval(
     notes: str | None = None,
 ) -> None:
     """Update an approval request row (e.g. pending -> approved/rejected)."""
-    conn = db.get_connection()
-    conn.execute(
-        "UPDATE approval_requests SET status = ?, decided_by = ?, decision_notes = ?"
-        " WHERE id = ?",
-        (status, decided_by, notes, approval_id),
-    )
-    conn.commit()
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE approval_requests SET status = ?, decided_by = ?, decision_notes = ?"
+            " WHERE id = ?",
+            (status, decided_by, notes, approval_id),
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------

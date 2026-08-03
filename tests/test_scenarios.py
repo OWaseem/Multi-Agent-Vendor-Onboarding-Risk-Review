@@ -61,8 +61,10 @@ def test_happy_path_standard_onboarding_auto_completes(app, make_request, seeded
         "planner",
         "reviewer",
         "mock_action",
+        "summarize",
     ]
     assert "human_review" not in out["workflow_trace"]
+    assert out["final_summary"]
 
 
 # ---------------------------------------------------------------------------

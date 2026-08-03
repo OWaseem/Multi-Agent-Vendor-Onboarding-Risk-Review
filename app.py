@@ -69,8 +69,7 @@ def render_trace(state_values) -> None:
         st.markdown(f"- `{step}`")
 
 
-def render_outcome(state_values) -> None:
-    verdict = state_values.get("reviewer_verdict")
+def render_planner_and_verdict(state_values) -> None:
     rec = state_values.get("planner_recommendation")
     if rec is not None:
         path = rec.recommended_path if hasattr(rec, "recommended_path") else rec.get("recommended_path")
@@ -78,6 +77,7 @@ def render_outcome(state_values) -> None:
         with st.expander("Planner recommendation", expanded=True):
             st.write(f"**Path:** {path}")
             st.write(reasoning)
+    verdict = state_values.get("reviewer_verdict")
     if verdict is not None:
         decision = verdict.decision if hasattr(verdict, "decision") else verdict.get("decision")
         feedback = verdict.feedback if hasattr(verdict, "feedback") else verdict.get("feedback", "")
@@ -86,11 +86,19 @@ def render_outcome(state_values) -> None:
         st.write(f"**Decision:** {decision} | **Risk score:** {risk_score:.0f}" if isinstance(risk_score, (int, float)) else f"**Decision:** {decision}")
         if feedback:
             st.write(feedback)
+
+
+def render_outcome(state_values) -> None:
+    render_planner_and_verdict(state_values)
     if state_values.get("final_status"):
         status = state_values["final_status"]
         label = status.value if hasattr(status, "value") else status
         st.markdown("### Final outcome")
         st.success(f"**{label}**")
+    summary = state_values.get("final_summary")
+    if summary:
+        st.markdown("### Summary")
+        st.write(summary)
 
 
 def document_widgets(prefix: str, defaults: list | None = None) -> list[SubmittedDocument]:
@@ -172,9 +180,10 @@ def handle_missing_documents(state_values, snap) -> None:
         st.rerun()
 
 
-def handle_human_gate(snap) -> None:
+def handle_human_gate(state_values, snap) -> None:
     intr = current_interrupt(snap)
     st.warning("**Escalated to human review** — final approval requires sign-off.")
+    render_planner_and_verdict(state_values)
     st.write(intr.get("question", ""))
     col1, col2 = st.columns(2)
     if col1.button("Approve", type="primary"):
@@ -194,13 +203,14 @@ def _resume_flow(value: str) -> None:
 def show_pending_approvals() -> None:
     st.markdown("---")
     st.header("Approval requests")
-    conn = db.get_connection()
-    rows = conn.execute(
-        "SELECT id, request_id, vendor_name, status, decided_by, decision_notes, created_at"
-        " FROM approval_requests ORDER BY id DESC LIMIT 10"
-    ).fetchall()
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, request_id, vendor_name, status, decided_by, decision_notes, created_at"
+            " FROM approval_requests ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        rows = [dict(r) for r in rows]
     if rows:
-        st.dataframe([dict(r) for r in rows], use_container_width=True)
+        st.dataframe(rows, use_container_width=True)
     else:
         st.caption("No approval requests yet.")
 
@@ -208,13 +218,14 @@ def show_pending_approvals() -> None:
 def show_status_log() -> None:
     st.markdown("---")
     st.header("Vendor status log")
-    conn = db.get_connection()
-    rows = conn.execute(
-        "SELECT id, request_id, vendor_name, final_status, notes, written_at"
-        " FROM vendor_status_log ORDER BY id DESC LIMIT 10"
-    ).fetchall()
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, request_id, vendor_name, final_status, notes, written_at"
+            " FROM vendor_status_log ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        rows = [dict(r) for r in rows]
     if rows:
-        st.dataframe([dict(r) for r in rows], use_container_width=True)
+        st.dataframe(rows, use_container_width=True)
     else:
         st.caption("No status writes yet.")
 
@@ -270,7 +281,7 @@ def main() -> None:
         if intr["type"] == "missing_documents":
             handle_missing_documents(state_values, snap)
         elif intr["type"] == "human_approval":
-            handle_human_gate(snap)
+            handle_human_gate(state_values, snap)
     elif workflow_complete(snap):
         render_outcome(state_values)
     else:

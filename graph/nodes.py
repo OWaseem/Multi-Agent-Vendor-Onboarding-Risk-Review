@@ -367,3 +367,63 @@ def reject(state: WorkflowState) -> dict[str, Any]:
         state.request_id, state.vendor_name, OnboardingStatus.REJECTED, notes="human rejected"
     )
     return {"final_status": OnboardingStatus.REJECTED, "workflow_trace": trace}
+
+
+# ---------------------------------------------------------------------------
+# 7. Final summary
+# ---------------------------------------------------------------------------
+
+
+def _summary_prompt(state: WorkflowState) -> str:
+    flags = ", ".join(f.value for f in state.risk_flags) or "none"
+    verdict_decision = state.reviewer_verdict.decision.value if state.reviewer_verdict else "n/a"
+    human = (
+        f" A human reviewer then chose to {state.human_decision.value} it."
+        if state.human_decision
+        else ""
+    )
+    status = state.final_status.value if state.final_status else "unknown"
+    return (
+        f"Write a 3-5 sentence plain-language summary of this vendor onboarding "
+        f"decision for a business audience. Vendor: {state.vendor_name} "
+        f"({state.vendor_category.value}, {state.country}). "
+        f"Risk flags identified: {flags}. Risk score: {state.risk_score:.0f} "
+        f"(escalation threshold {models.ESCALATION_THRESHOLD:.0f}). "
+        f"Reviewer decision: {verdict_decision}.{human} Final status: {status}. "
+        f"Explain (1) why the risk score came out the way it did, (2) whether human "
+        f"sign-off was required and why or why not, and (3) the final outcome."
+    )
+
+
+def _fallback_summary(state: WorkflowState) -> str:
+    flags = ", ".join(f.value for f in state.risk_flags) or "none identified"
+    status = state.final_status.value if state.final_status else "unknown"
+    lines = [
+        f"{state.vendor_name} ({state.vendor_category.value}, {state.country}) "
+        f"scored a risk score of {state.risk_score:.0f}, driven by: {flags}."
+    ]
+    if state.requires_human_review:
+        reason = state.reviewer_verdict.feedback if state.reviewer_verdict else ""
+        lines.append(
+            "Human sign-off was required because the request was escalated"
+            + (f": {reason}" if reason else " by the risk/compliance reviewer.")
+        )
+        if state.human_decision:
+            lines.append(
+                f"The human reviewer chose to {state.human_decision.value} the request."
+            )
+    else:
+        lines.append(
+            "No human sign-off was needed: the risk score stayed below the "
+            "escalation threshold and no mandatory-review category applied, so the "
+            "reviewer approved the standard path automatically."
+        )
+    lines.append(f"Final status: {status}.")
+    return " ".join(lines)
+
+
+def summarize(state: WorkflowState) -> dict[str, Any]:
+    """Plain-language wrap-up of the whole run: risk score, human-review need, outcome."""
+    trace = _trace(state, "summarize")
+    summary = llm.llm_text(_summary_prompt(state)) or _fallback_summary(state)
+    return {"final_summary": summary, "workflow_trace": trace}

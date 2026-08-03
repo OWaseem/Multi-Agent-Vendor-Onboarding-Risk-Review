@@ -28,10 +28,10 @@ DEFAULT_BEDROCK_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 
 def _bedrock_configured() -> bool:
+    # Only actual credential sources count; BEDROCK_MODEL_ID/AWS_REGION are
+    # just descriptive defaults in .env.example and must not trigger a doomed
+    # Bedrock call when no credentials are actually present.
     aws_creds = {
-        "BEDROCK_MODEL_ID",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_PROFILE",

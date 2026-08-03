@@ -3,12 +3,12 @@
 Graph shape::
 
     START -> intake -> gather_evidence -> planner -> reviewer
-    reviewer: approved -> mock_action -> END
+    reviewer: approved -> mock_action -> summarize -> END
               escalate -> open_approval -> human_review
               revise (revision_count <= cap) -> planner
               revise (revision_count > cap) -> open_approval
-    human_review: approve -> mock_action -> END
-                  reject -> reject -> END
+    human_review: approve -> mock_action -> summarize -> END
+                  reject -> reject -> summarize -> END
 
 The human-approval gate and the missing-document flow both pause the graph via
 ``interrupt``; resume with :class:`langgraph.types.Command` using the same
@@ -89,6 +89,7 @@ def build_graph():
     graph.add_node("human_review", nodes.human_review)
     graph.add_node("mock_action", nodes.mock_action)
     graph.add_node("reject", nodes.reject)
+    graph.add_node("summarize", nodes.summarize)
 
     graph.add_edge(START, "intake")
     graph.add_edge("intake", "gather_evidence")
@@ -98,8 +99,9 @@ def build_graph():
     graph.add_conditional_edges("reviewer", _route_reviewer)
     graph.add_edge("open_approval", "human_review")
     graph.add_conditional_edges("human_review", _route_human)
-    graph.add_edge("mock_action", END)
-    graph.add_edge("reject", END)
+    graph.add_edge("mock_action", "summarize")
+    graph.add_edge("reject", "summarize")
+    graph.add_edge("summarize", END)
     return graph
 
 
