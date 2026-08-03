@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 *.db
 data/
+uploads/
 .pytest_cache/
 .env
 .DS_Store

@@ -15,6 +15,7 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+import document_validation
 import llm
 import models
 import tools
@@ -75,37 +76,66 @@ def _trace(state: WorkflowState, node: str) -> list[str]:
     return state.workflow_trace + [node]
 
 
+def _llm_text_or_fallback(prompt: str, fallback: str) -> tuple[str, str | None]:
+    """Try the configured LLM; on failure, fall back to template text but also
+    return an error message so the caller can surface it (see llm.LLMCallError)."""
+    try:
+        text = llm.llm_text(prompt)
+    except llm.LLMCallError as exc:
+        return fallback, f"LLM call failed, using fallback text instead: {exc}"
+    return text or fallback, None
+
+
 # ---------------------------------------------------------------------------
 # 1. Intake / document-completeness agent
 # ---------------------------------------------------------------------------
 
 
+def _check_documents(
+    required: set[DocumentType], docs: list[SubmittedDocument]
+) -> tuple[list[DocumentType], dict[str, list[str]]]:
+    """Check presence and format validity of each required document type.
+
+    Returns (missing types, {doc_type_value: format errors}) for any required
+    type that's either absent or present but fails ``document_validation``.
+    """
+    by_type = {d.type: d for d in docs if d.type in required}
+    missing = sorted(required - by_type.keys(), key=lambda d: d.value)
+    invalid: dict[str, list[str]] = {}
+    for doc_type, doc in by_type.items():
+        errors = document_validation.validate_document(doc_type, doc.reference)
+        if errors:
+            invalid[doc_type.value] = errors
+    return missing, invalid
+
+
 def intake(state: WorkflowState) -> dict[str, Any]:
     """Check the required-document checklist for the vendor's category.
 
-    Pauses via ``interrupt`` asking the requester for missing documents. On
-    resume the caller supplies the *complete* updated document list, which is
-    re-validated (looping if still incomplete).
+    Verifies both presence and format validity (``document_validation``) of
+    each required document. Pauses via ``interrupt`` asking the requester to
+    supply missing documents and/or fix invalid ones. On resume the caller
+    supplies the *complete* updated document list, which is re-checked
+    (looping if still incomplete or invalid).
     """
     trace = _trace(state, "intake")
     required = required_document_types(state.vendor_category, state.data_sensitive)
     docs = list(state.submitted_documents)
-    submitted_types = {d.type for d in docs}
-    missing = sorted(required - submitted_types, key=lambda d: d.value)
+    missing, invalid = _check_documents(required, docs)
 
-    while missing:
+    while missing or invalid:
         resumed_value = interrupt(
             {
                 "type": "missing_documents",
                 "request_id": state.request_id,
                 "missing_documents": [m.value for m in missing],
-                "message": "Please submit the missing documents listed above.",
+                "invalid_documents": invalid,
+                "message": "Please submit the missing documents and/or fix the format issues listed above.",
             }
         )
         # Resume value: the full, updated list of submitted documents.
         docs = _normalize_documents(resumed_value)
-        submitted_types = {d.type for d in docs}
-        missing = sorted(required - submitted_types, key=lambda d: d.value)
+        missing, invalid = _check_documents(required, docs)
 
     return {
         "submitted_documents": docs,
@@ -212,15 +242,18 @@ def planner(state: WorkflowState) -> dict[str, Any]:
         else:
             path = RecommendedPath.STANDARD
 
-    reasoning = llm.llm_text(_planner_prompt(state, flags, path)) or _fallback_reasoning(
-        state, flags, path
+    reasoning, llm_error = _llm_text_or_fallback(
+        _planner_prompt(state, flags, path), _fallback_reasoning(state, flags, path)
     )
     recommendation = PlannerRecommendation(
         recommended_path=path,
         reasoning=reasoning,
         cited_policy_chunks=[c.chunk_id for c in state.retrieved_policy_chunks],
     )
-    return {"risk_flags": flags, "planner_recommendation": recommendation, "workflow_trace": trace}
+    update = {"risk_flags": flags, "planner_recommendation": recommendation, "workflow_trace": trace}
+    if llm_error:
+        update["llm_error"] = llm_error
+    return update
 
 
 # ---------------------------------------------------------------------------
@@ -279,18 +312,18 @@ def reviewer(state: WorkflowState) -> dict[str, Any]:
     verdict_text = (
         f"{decision.value} (risk_score={score:.0f}, revision_count={revision_count})"
     )
-    verdict = ReviewerVerdict(
-        decision=decision,
-        feedback=llm.llm_text(_reviewer_prompt(state, verdict_text)) or feedback,
-        risk_score=score,
-    )
-    return {
+    llm_feedback, llm_error = _llm_text_or_fallback(_reviewer_prompt(state, verdict_text), feedback)
+    verdict = ReviewerVerdict(decision=decision, feedback=llm_feedback, risk_score=score)
+    update = {
         "risk_flags": flags,
         "risk_score": score,
         "reviewer_verdict": verdict,
         "revision_count": revision_count,
         "workflow_trace": trace,
     }
+    if llm_error:
+        update["llm_error"] = llm_error
+    return update
 
 
 # ---------------------------------------------------------------------------
@@ -299,15 +332,25 @@ def reviewer(state: WorkflowState) -> dict[str, Any]:
 
 
 def open_approval(state: WorkflowState) -> dict[str, Any]:
-    """Create the (mocked) pending approval request before human review."""
+    """Create the (mocked) pending approval request before human review.
+
+    Also drafts the plain-language summary now (risk score, why this needs a
+    human sign-off) so it's available to the reviewer before they decide.
+    ``summarize`` regenerates it after the decision to fold in the outcome.
+    """
     trace = _trace(state, "open_approval")
     notes = f"requires human review; risk_score={state.risk_score:.0f}"
     approval_id = tools.create_approval_request(state.request_id, state.vendor_name, notes)
-    return {
+    summary, llm_error = _build_summary(state.model_copy(update={"requires_human_review": True}))
+    update = {
         "pending_approval_id": approval_id,
         "requires_human_review": True,
+        "final_summary": summary,
         "workflow_trace": trace,
     }
+    if llm_error:
+        update["llm_error"] = llm_error
+    return update
 
 
 def human_review(state: WorkflowState) -> dict[str, Any]:
@@ -377,27 +420,27 @@ def reject(state: WorkflowState) -> dict[str, Any]:
 def _summary_prompt(state: WorkflowState) -> str:
     flags = ", ".join(f.value for f in state.risk_flags) or "none"
     verdict_decision = state.reviewer_verdict.decision.value if state.reviewer_verdict else "n/a"
-    human = (
-        f" A human reviewer then chose to {state.human_decision.value} it."
-        if state.human_decision
-        else ""
-    )
-    status = state.final_status.value if state.final_status else "unknown"
+    if state.human_decision:
+        outcome = f" A human reviewer chose to {state.human_decision.value} it."
+    elif state.requires_human_review:
+        outcome = " It is now awaiting a human reviewer's sign-off."
+    else:
+        outcome = ""
+    status = f" Final status: {state.final_status.value}." if state.final_status else ""
     return (
         f"Write a 3-5 sentence plain-language summary of this vendor onboarding "
-        f"decision for a business audience. Vendor: {state.vendor_name} "
+        f"request for a business audience. Vendor: {state.vendor_name} "
         f"({state.vendor_category.value}, {state.country}). "
         f"Risk flags identified: {flags}. Risk score: {state.risk_score:.0f} "
         f"(escalation threshold {models.ESCALATION_THRESHOLD:.0f}). "
-        f"Reviewer decision: {verdict_decision}.{human} Final status: {status}. "
+        f"Reviewer decision: {verdict_decision}.{outcome}{status} "
         f"Explain (1) why the risk score came out the way it did, (2) whether human "
-        f"sign-off was required and why or why not, and (3) the final outcome."
+        f"sign-off was/is required and why or why not, and (3) the outcome so far."
     )
 
 
 def _fallback_summary(state: WorkflowState) -> str:
     flags = ", ".join(f.value for f in state.risk_flags) or "none identified"
-    status = state.final_status.value if state.final_status else "unknown"
     lines = [
         f"{state.vendor_name} ({state.vendor_category.value}, {state.country}) "
         f"scored a risk score of {state.risk_score:.0f}, driven by: {flags}."
@@ -412,18 +455,28 @@ def _fallback_summary(state: WorkflowState) -> str:
             lines.append(
                 f"The human reviewer chose to {state.human_decision.value} the request."
             )
+        else:
+            lines.append("It is now awaiting the human reviewer's decision.")
     else:
         lines.append(
             "No human sign-off was needed: the risk score stayed below the "
             "escalation threshold and no mandatory-review category applied, so the "
             "reviewer approved the standard path automatically."
         )
-    lines.append(f"Final status: {status}.")
+    if state.final_status:
+        lines.append(f"Final status: {state.final_status.value}.")
     return " ".join(lines)
+
+
+def _build_summary(state: WorkflowState) -> tuple[str, str | None]:
+    return _llm_text_or_fallback(_summary_prompt(state), _fallback_summary(state))
 
 
 def summarize(state: WorkflowState) -> dict[str, Any]:
     """Plain-language wrap-up of the whole run: risk score, human-review need, outcome."""
     trace = _trace(state, "summarize")
-    summary = llm.llm_text(_summary_prompt(state)) or _fallback_summary(state)
-    return {"final_summary": summary, "workflow_trace": trace}
+    summary, llm_error = _build_summary(state)
+    update = {"final_summary": summary, "workflow_trace": trace}
+    if llm_error:
+        update["llm_error"] = llm_error
+    return update

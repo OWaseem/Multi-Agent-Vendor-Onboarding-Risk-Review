@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
@@ -39,6 +40,9 @@ DOC_LABELS: dict[str, str] = {
 }
 
 CATEGORY_LABELS = {c.value: c.value for c in VendorCategory}
+
+SAMPLE_DOCS_DIR = Path(__file__).resolve().parent / "sample_documents"
+UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
 
 
 def ensure_environment() -> None:
@@ -88,6 +92,19 @@ def render_planner_and_verdict(state_values) -> None:
             st.write(feedback)
 
 
+def render_summary(state_values) -> None:
+    summary = state_values.get("final_summary")
+    if summary:
+        st.markdown("### Summary")
+        st.write(summary)
+
+
+def render_llm_error(state_values) -> None:
+    error = state_values.get("llm_error")
+    if error:
+        st.error(f"LLM provider call failed — falling back to template text. {error}")
+
+
 def render_outcome(state_values) -> None:
     render_planner_and_verdict(state_values)
     if state_values.get("final_status"):
@@ -95,14 +112,35 @@ def render_outcome(state_values) -> None:
         label = status.value if hasattr(status, "value") else status
         st.markdown("### Final outcome")
         st.success(f"**{label}**")
-    summary = state_values.get("final_summary")
-    if summary:
-        st.markdown("### Summary")
-        st.write(summary)
+    render_summary(state_values)
+
+
+def render_sample_downloads() -> None:
+    """Download buttons for a valid example of each document type.
+
+    Rendered outside any ``st.form`` — Streamlit forbids ``download_button``
+    inside a form, and this is shared by both the new-request form and the
+    resubmit-on-resume screen.
+    """
+    with st.expander("Need example documents? Download a valid sample per type"):
+        for doc_value, label in DOC_LABELS.items():
+            sample_path = SAMPLE_DOCS_DIR / f"{doc_value}_valid_example.pdf"
+            if sample_path.exists():
+                st.download_button(
+                    label,
+                    data=sample_path.read_bytes(),
+                    file_name=sample_path.name,
+                    key=f"sample_{doc_value}",
+                )
 
 
 def document_widgets(prefix: str, defaults: list | None = None) -> list[SubmittedDocument]:
-    """Checkboxes + filename inputs for the six document types."""
+    """Checkboxes + real file uploads for the six document types.
+
+    Each type expects a PDF with labeled fields (see ``document_validation.py``);
+    the intake node rejects a submitted file that doesn't match it. See
+    ``render_sample_downloads`` for grabbing a valid example of each type.
+    """
     existing: dict[str, str] = {}
     for d in defaults or []:
         t = d.type.value if hasattr(d, "type") else d["type"]
@@ -111,13 +149,25 @@ def document_widgets(prefix: str, defaults: list | None = None) -> list[Submitte
     docs: list[SubmittedDocument] = []
     for doc_value, label in DOC_LABELS.items():
         checked = st.checkbox(label, value=doc_value in existing, key=f"{prefix}_has_{doc_value}")
-        if checked:
-            default_name = existing.get(doc_value, f"{doc_value}.pdf")
-            reference = st.text_input("filename", value=default_name, key=f"{prefix}_ref_{doc_value}")
+        if not checked:
+            continue
+        uploaded = st.file_uploader(
+            "Upload file (.pdf)", type=["pdf"], key=f"{prefix}_file_{doc_value}"
+        )
+        if uploaded is not None:
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            dest = UPLOAD_DIR / f"{prefix}_{doc_value}_{uuid.uuid4().hex[:8]}.pdf"
+            dest.write_bytes(uploaded.getvalue())
+            reference = str(dest)
+        else:
+            reference = existing.get(doc_value, "")
+            if not reference:
+                st.caption("No file uploaded yet — this document will be treated as missing.")
+        if reference:
             docs.append(
                 SubmittedDocument(
                     type=DocumentType(doc_value),
-                    reference=reference or f"{doc_value}.pdf",
+                    reference=reference,
                     submitted_at=datetime.now(),
                 )
             )
@@ -126,27 +176,31 @@ def document_widgets(prefix: str, defaults: list | None = None) -> list[Submitte
 
 def new_request_form() -> None:
     st.header("New vendor request")
-    with st.form("request_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            vendor_name = st.text_input("Vendor name", value="Staple Supply Co.")
-            category = st.selectbox("Vendor category", list(CATEGORY_LABELS), key="form_category")
-            country = st.text_input("Country of operation", value="US")
-        with col2:
-            requester_name = st.text_input("Requester name", value="Alice Johnson")
-            department = st.text_input("Department", value="Operations")
-            relationship = st.selectbox(
-                "Relationship status",
-                [r.value for r in RelationshipStatus],
-                key="form_relationship",
-            )
-        data_sensitive = st.checkbox("Data-sensitive: will this vendor touch company/customer data or IT systems?")
-        business_justification = st.text_area(
-            "Business justification (for policy exceptions)", value=""
+    render_sample_downloads()
+    # Not wrapped in st.form: the document checkboxes need to immediately
+    # reveal a file uploader when checked, but forms only rerun the script on
+    # submit, so a checkbox's live state never reaches the code below it
+    # until it's too late to react. Plain widgets rerun on every interaction.
+    col1, col2 = st.columns(2)
+    with col1:
+        vendor_name = st.text_input("Vendor name", value="Staple Supply Co.")
+        category = st.selectbox("Vendor category", list(CATEGORY_LABELS), key="form_category")
+        country = st.text_input("Country of operation", value="US")
+    with col2:
+        requester_name = st.text_input("Requester name", value="Alice Johnson")
+        department = st.text_input("Department", value="Operations")
+        relationship = st.selectbox(
+            "Relationship status",
+            [r.value for r in RelationshipStatus],
+            key="form_relationship",
         )
-        st.markdown("**Attached documents**")
-        submitted = document_widgets("new")
-        submitted_documents = st.form_submit_button("Submit request", type="primary")
+    data_sensitive = st.checkbox("Data-sensitive: will this vendor touch company/customer data or IT systems?")
+    business_justification = st.text_area(
+        "Business justification (for policy exceptions)", value=""
+    )
+    st.markdown("**Attached documents**")
+    submitted = document_widgets("new")
+    submitted_documents = st.button("Submit request", type="primary")
 
     if submitted_documents:
         request = VendorRequest(
@@ -167,8 +221,16 @@ def new_request_form() -> None:
 def handle_missing_documents(state_values, snap) -> None:
     intr = current_interrupt(snap)
     missing = intr.get("missing_documents", [])
-    st.error(f"**Documents missing** — the workflow is paused awaiting the requester.")
-    st.write("Please provide the following documents:")
+    invalid = intr.get("invalid_documents", {})
+    st.error("**Documents missing or invalid** — the workflow is paused awaiting the requester.")
+    if missing:
+        st.write("**Missing:** " + ", ".join(DOC_LABELS.get(m, m) for m in missing))
+    if invalid:
+        st.write("**Format problems:**")
+        for doc_value, errors in invalid.items():
+            st.write(f"- {DOC_LABELS.get(doc_value, doc_value)}: {'; '.join(errors)}")
+    st.write("Please provide the missing documents and/or re-upload corrected files:")
+    render_sample_downloads()
     submitted_now = document_widgets("resume", defaults=state_values.get("submitted_documents", []))
     if st.button("Resubmit documents", type="primary"):
         app = st.session_state["app"]
@@ -184,6 +246,7 @@ def handle_human_gate(state_values, snap) -> None:
     intr = current_interrupt(snap)
     st.warning("**Escalated to human review** — final approval requires sign-off.")
     render_planner_and_verdict(state_values)
+    render_summary(state_values)
     st.write(intr.get("question", ""))
     col1, col2 = st.columns(2)
     if col1.button("Approve", type="primary"):
@@ -275,6 +338,7 @@ def main() -> None:
     state_values = out if isinstance(out, dict) else out
 
     render_trace(state_values)
+    render_llm_error(state_values)
 
     intr = current_interrupt(snap)
     if intr:

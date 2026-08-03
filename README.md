@@ -270,8 +270,8 @@ tests/             pytest scenarios
   full rubric, producing the deterministic revise-then-approve path.
 - **Vendor DB is authoritative** for prior-relationship when a record exists;
   otherwise the requester's claim is used.
-- **Embeds use a local deterministic bag-of-words model** (no network/model
-  download). Swap `embeddings.embed` for sentence-transformers if desired —
-  no other module changes.
+- **Embeds use `sentence-transformers`** (`all-MiniLM-L6-v2`, 384 dims, runs
+  locally after the first model download) for real semantic similarity in
+  retrieval. Override the model via `SENTENCE_TRANSFORMER_MODEL`.
 - **Side-effects are fully mocked** — approvals and status writes go only to
   local SQLite. Nothing external is ever called.

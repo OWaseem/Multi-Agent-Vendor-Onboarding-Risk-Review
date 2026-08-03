@@ -300,6 +300,7 @@ class WorkflowState(BaseModel):
     final_status: Optional[OnboardingStatus] = None
     pending_approval_id: Optional[int] = None  # row id in approval_requests
     final_summary: Optional[str] = None  # plain-language wrap-up of the whole run
+    llm_error: Optional[str] = None  # set when a configured LLM provider call fails
 
     # --- observability ---
     workflow_trace: list[str] = Field(default_factory=list)  # ordered node visits

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -47,15 +48,25 @@ def app(seeded_env):
     return create_app()
 
 
+SAMPLE_DOCS_DIR = Path(__file__).resolve().parent.parent / "sample_documents"
+
+
 def base_documents(extra: list[DocumentType] | None = None) -> list[SubmittedDocument]:
-    """The four base-required documents, plus any extra types."""
+    """The four base-required documents, plus any extra types.
+
+    Each points at the checked-in valid example file for its type, so
+    intake's format validation passes.
+    """
     types = [
         DocumentType.W9_TAX_ID,
         DocumentType.CERTIFICATE_OF_INSURANCE,
         DocumentType.BUSINESS_LICENSE,
         DocumentType.CODE_OF_CONDUCT,
     ] + list(extra or [])
-    return [SubmittedDocument(type=t, reference=f"{t.value}.pdf") for t in types]
+    return [
+        SubmittedDocument(type=t, reference=str(SAMPLE_DOCS_DIR / f"{t.value}_valid_example.pdf"))
+        for t in types
+    ]
 
 
 @pytest.fixture

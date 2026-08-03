@@ -16,6 +16,7 @@ pipeline runs offline.
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from typing import Any
@@ -24,8 +25,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
+
+class LLMCallError(RuntimeError):
+    """A provider *is* configured but the call itself failed (bad credentials,
+    network error, wrong model id, etc.) — distinct from "no provider set",
+    which is a supported, silent offline mode."""
+
 #: Default Bedrock model id; override with BEDROCK_MODEL_ID in .env.
-DEFAULT_BEDROCK_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-6"
 
 
 def _bedrock_configured() -> bool:
@@ -91,7 +100,12 @@ def get_llm() -> Any | None:
 
 
 def llm_text(prompt: str, max_tokens: int = 200) -> str | None:
-    """Run a single prompt; return text, or None when no LLM is configured."""
+    """Run a single prompt; return text, or None when no LLM is configured.
+
+    Raises ``LLMCallError`` when a provider *is* configured but the call
+    itself fails — callers should catch this, fall back to template text, and
+    surface the failure rather than silently swallowing it.
+    """
     llm = get_llm()
     if llm is None:
         return None
@@ -99,5 +113,6 @@ def llm_text(prompt: str, max_tokens: int = 200) -> str | None:
         response = llm.invoke(prompt)
         content = response.content if hasattr(response, "content") else str(response)
         return str(content).strip()
-    except Exception as exc:  # pragma: no cover - network/provider errors
-        return None
+    except Exception as exc:
+        logger.error("LLM call failed: %s", exc)
+        raise LLMCallError(str(exc)) from exc
