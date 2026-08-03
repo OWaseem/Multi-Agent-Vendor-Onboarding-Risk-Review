@@ -4,9 +4,10 @@ Reads provider configuration from ``.env`` via python-dotenv. Preference order:
 
 1. Amazon Bedrock (``BEDROCK_MODEL_ID``, credentials via the standard AWS
    chain: ``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY``/``AWS_REGION``,
-   ``AWS_PROFILE``, or ``~/.aws/credentials``)
+   ``AWS_PROFILE``, or a Bedrock API key in ``AWS_BEARER_TOKEN_BEDROCK``)
 2. OpenAI (``OPENAI_API_KEY``)
 3. Anthropic (``ANTHROPIC_API_KEY``)
+4. Google Gemini (``GOOGLE_API_KEY``)
 
 When none is configured, ``get_llm()`` returns ``None`` and the
 planner/reviewer nodes fall back to deterministic template prose, so the whole
@@ -69,6 +70,15 @@ def _llm() -> Any | None:
         return ChatAnthropic(
             model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
             temperature=0,
+            timeout=30,
+        )
+    if os.getenv("GOOGLE_API_KEY"):
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            temperature=0,
+            max_output_tokens=2048,
             timeout=30,
         )
     return None

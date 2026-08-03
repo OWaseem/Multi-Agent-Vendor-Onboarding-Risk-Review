@@ -204,8 +204,8 @@ pip install -r requirements.txt
 # 2. (Optional) configure an LLM provider — works without one, reasoning
 #    text just falls back to deterministic templates.
 #    Default provider is Amazon Bedrock (set BEDROCK_MODEL_ID, AWS_REGION,
-#    and credentials via the standard AWS chain); OpenAI/Anthropic keys are
-#    used as fallbacks.
+#    and credentials via the standard AWS chain); OpenAI/Anthropic/Gemini
+#    keys are used as fallbacks.
 cp .env.example .env        # then fill in the provider you plan to use
 
 # 3. Run the demo UI
@@ -232,7 +232,7 @@ policy_docs/       6 authored policy documents (RAG source material)
 ingestion.py       Chunking + Chroma ingestion, metadata-filtered retrieval
 embeddings.py      Local deterministic embedding model
 tools.py           The 6 tools (4 read-only, 2 mocked side-effects)
-llm.py             Model-agnostic LLM client (Amazon Bedrock -> OpenAI -> Anthropic)
+llm.py             Model-agnostic LLM client (Bedrock -> OpenAI -> Anthropic -> Gemini)
 graph/nodes.py     The three agents + human gate as LangGraph nodes
 graph/workflow.py  Graph wiring, routing, interrupt-aware run helpers
 app.py             Streamlit UI
