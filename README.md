@@ -43,6 +43,16 @@ organization to start working with a new or existing vendor submits a
 - **Banking / ACH form** — required before final "approved" status (not a
   blocker for onboarding review itself)
 
+**Document format is validated, not just presence.** Each document type is a
+real PDF with a defined set of labeled fields (e.g. the W-9 expects `Legal
+Name`, `TIN`, `Business Classification`, `Address`, `Signature Date` lines);
+see `document_validation.py` for every type's schema and `sample_documents/`
+for one valid example PDF per type. A PDF that's missing a required field, has
+an invalid value (e.g. a malformed TIN or an expired certificate), or isn't a
+real PDF at all is rejected the same way a missing document is — the intake
+node reports it in the pause/resume interrupt. Full OCR of scanned/image-only
+PDFs is out of scope; validation reads the PDF's extracted text.
+
 **High-risk criteria** (any one trips a `risk_flag`, evaluated by the Risk/
 Compliance Reviewer against retrieved policy):
 
@@ -72,7 +82,7 @@ Rejected
 
 | Role | Responsibility | Explicitly NOT responsible for |
 |---|---|---|
-| **Intake / Document-Completeness Agent** | Checks the submission against the required-document checklist for that vendor's category. Flags missing fields/documents. | Judging risk, recommending a path |
+| **Intake / Document-Completeness Agent** | Checks the submission against the required-document checklist for that vendor's category, and validates each submitted PDF against its type's expected fields (`document_validation.py`). Flags missing documents and format/field errors. | Judging risk, recommending a path |
 | **Onboarding Planner** | Once the submission is complete, looks up the vendor record and retrieves relevant policy via RAG, then drafts a recommended onboarding path (standard / high-risk / needs-exception) with reasoning. | Final approval, policy compliance sign-off |
 | **Risk/Compliance Reviewer (critic)** | Validates the planner's recommendation against retrieved policy, a risk score, and the watchlist. Approves, sends back for revision, or escalates to human review. | Drafting the initial plan, gathering documents |
 
@@ -132,6 +142,10 @@ revision_count          # capped at 2 -> forces escalation
 requires_human_review
 human_decision
 final_status
+final_summary           # plain-language wrap-up; drafted pre-decision at
+                         # escalation, regenerated post-decision with the outcome
+llm_error                # set when a configured LLM provider call fails
+                         # (falls back to template text; surfaced in the UI)
 workflow_trace          # ordered list of nodes visited, for the UI
 ```
 
@@ -140,8 +154,8 @@ workflow_trace          # ordered list of nodes visited, for the UI
 ## 6. Graph shape (nodes & routes)
 
 ```text
-Intake (completeness check)
-    ├── missing documents → pause / ask requester (interrupt) → back to Intake
+Intake (completeness + document format check)
+    ├── missing/invalid documents → pause / ask requester (interrupt) → back to Intake
     └── complete
          ↓
     Vendor Lookup + Policy Retrieval (tools)
@@ -149,12 +163,19 @@ Intake (completeness check)
     Onboarding Planner (draft recommendation)
          ↓
     Risk/Compliance Reviewer (critic)
-         ├── approved → Mock Action (create approval + update status) → Complete
+         ├── approved → Mock Action → Summarize → Complete
          ├── revision needed → back to Planner (revision_count += 1, cap 2)
-         └── high-risk / exception / retry-limit hit → Human Review
-                  ├── approved → Mock Action → Complete
-                  └── rejected → Rejected outcome
+         └── high-risk / exception / retry-limit hit → Open Approval
+                  (drafts a pre-decision summary) → Human Review
+                       ├── approved → Mock Action → Summarize → Complete
+                       └── rejected → Reject → Summarize → Rejected outcome
 ```
+
+`Summarize` runs right before every terminal edge and drafts a plain-language
+wrap-up via the LLM (risk score reasoning, whether human sign-off was needed,
+the outcome), falling back to deterministic template text if no provider is
+configured or the call fails. `Open Approval` runs it once *before* the human
+decision too, so the reviewer sees that context before approving/rejecting.
 
 ---
 
@@ -214,7 +235,8 @@ streamlit run app.py
 
 On first run the app seeds the mock vendor DB + watchlist into
 `data/vendor_onboarding.db` and indexes the policy docs into
-`data/chroma/` automatically.
+`data/chroma/` automatically. Uploaded documents are saved locally under
+`uploads/` (gitignored) so the intake node can read and validate them.
 
 **Run the test suite** (the 5 required scenarios + routing extras):
 
@@ -225,18 +247,20 @@ pytest tests/ -v
 ### Project layout
 
 ```
-models.py          Pydantic models (VendorRequest, WorkflowState, enums, risk rubric)
-schema.sql / db.py Mocked SQLite persistence (vendors, watchlist, approvals, status log)
-seeders.py         Mock vendor master + sanctions watchlist data
-policy_docs/       6 authored policy documents (RAG source material)
-ingestion.py       Chunking + Chroma ingestion, metadata-filtered retrieval
-embeddings.py      Local deterministic embedding model
-tools.py           The 6 tools (4 read-only, 2 mocked side-effects)
-llm.py             Model-agnostic LLM client (Bedrock -> OpenAI -> Anthropic -> Gemini)
-graph/nodes.py     The three agents + human gate as LangGraph nodes
-graph/workflow.py  Graph wiring, routing, interrupt-aware run helpers
-app.py             Streamlit UI
-tests/             pytest scenarios
+models.py              Pydantic models (VendorRequest, WorkflowState, enums, risk rubric)
+schema.sql / db.py     Mocked SQLite persistence (vendors, watchlist, approvals, status log)
+seeders.py             Mock vendor master + sanctions watchlist data
+policy_docs/           6 authored policy documents (RAG source material)
+ingestion.py           Chunking + Chroma ingestion, metadata-filtered retrieval
+embeddings.py          sentence-transformers embedding model (all-MiniLM-L6-v2)
+document_validation.py Per-document-type PDF schema + field validators (intake format checks)
+sample_documents/      One valid example PDF per required document type
+tools.py               The 6 tools (4 read-only, 2 mocked side-effects)
+llm.py                 Model-agnostic LLM client (Bedrock -> OpenAI -> Anthropic -> Gemini)
+graph/nodes.py         The three agents + human gate + summarize as LangGraph nodes
+graph/workflow.py      Graph wiring, routing, interrupt-aware run helpers
+app.py                 Streamlit UI
+tests/                 pytest scenarios
 ```
 
 ### Demo scenarios
@@ -249,6 +273,11 @@ tests/             pytest scenarios
 | 4 | Revision loop | **Firstline Facilities GmbH**, Facilities, Germany, existing, all 4 base docs |
 | 5 | Escalation → human gate | **Helios Data Partners**, IT/Software, Germany, data-sensitive, new, base docs only (add security questionnaire when asked) |
 | bonus | Watchlist → escalate | **Blackrock Shipping LLC**, any category, complete docs |
+
+Each document checkbox reveals a real file uploader (`.pdf` only). Use the
+"Need example documents?" expander above the form to download a valid sample
+PDF per type — upload those as-is for the happy path, or edit one (e.g. wreck
+the TIN, expire a certificate) to see the format-rejection path.
 
 ### Assumptions & deviations
 
@@ -275,3 +304,19 @@ tests/             pytest scenarios
   retrieval. Override the model via `SENTENCE_TRANSFORMER_MODEL`.
 - **Side-effects are fully mocked** — approvals and status writes go only to
   local SQLite. Nothing external is ever called.
+- **Document validation is field-based, not full OCR.** Each required
+  document is a PDF whose extracted text must contain simple `Label: Value`
+  lines for its type's required fields (`document_validation.py`); a scanned
+  image-only PDF or one missing/garbling those lines fails, same as a missing
+  document. This is a deliberate simplification of real PDF/OCR parsing.
+- **LLM failures are surfaced, not silently swallowed.** "No provider
+  configured" (blank `.env`) is a supported, silent offline mode — the
+  planner/reviewer/summary nodes just use template text. But if a provider
+  *is* configured and the call itself fails (bad credentials, retired model,
+  network error), `llm.LLMCallError` is raised, logged, and recorded in
+  `llm_error` so the UI shows a visible warning instead of quietly using
+  fallback text you'd have no way to notice.
+- **The final summary is drafted twice.** `open_approval` drafts it as soon as
+  a request is escalated (so the human reviewer sees risk-score reasoning
+  *before* deciding); `summarize` regenerates it after the decision to fold in
+  the outcome.
