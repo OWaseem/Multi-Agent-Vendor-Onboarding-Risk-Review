@@ -134,12 +134,27 @@ def render_sample_downloads() -> None:
                 )
 
 
+def _sample_document_defaults() -> list[SubmittedDocument]:
+    """Pre-attach the bundled valid sample PDF for every type.
+
+    Lets a new request submit cleanly out of the box; the requester can still
+    replace any of them with their own upload.
+    """
+    docs = []
+    for doc_value in DOC_LABELS:
+        sample_path = SAMPLE_DOCS_DIR / f"{doc_value}_valid_example.pdf"
+        if sample_path.exists():
+            docs.append(SubmittedDocument(type=DocumentType(doc_value), reference=str(sample_path)))
+    return docs
+
+
 def document_widgets(prefix: str, defaults: list | None = None) -> list[SubmittedDocument]:
     """Checkboxes + real file uploads for the six document types.
 
     Each type expects a PDF with labeled fields (see ``document_validation.py``);
-    the intake node rejects a submitted file that doesn't match it. See
-    ``render_sample_downloads`` for grabbing a valid example of each type.
+    the intake node rejects a submitted file that doesn't match it. ``defaults``
+    pre-attaches a reference (e.g. the bundled sample, or a prior submission) per
+    type; uploading a file always overrides it.
     """
     existing: dict[str, str] = {}
     for d in defaults or []:
@@ -152,16 +167,19 @@ def document_widgets(prefix: str, defaults: list | None = None) -> list[Submitte
         if not checked:
             continue
         uploaded = st.file_uploader(
-            "Upload file (.pdf)", type=["pdf"], key=f"{prefix}_file_{doc_value}"
+            "Upload file (.pdf) — replaces the attached file below", type=["pdf"], key=f"{prefix}_file_{doc_value}"
         )
         if uploaded is not None:
             UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
             dest = UPLOAD_DIR / f"{prefix}_{doc_value}_{uuid.uuid4().hex[:8]}.pdf"
             dest.write_bytes(uploaded.getvalue())
             reference = str(dest)
+            st.caption(f"Attached: {uploaded.name} (just uploaded)")
         else:
             reference = existing.get(doc_value, "")
-            if not reference:
+            if reference:
+                st.caption(f"Attached: {Path(reference).name} — upload a file above to replace it.")
+            else:
                 st.caption("No file uploaded yet — this document will be treated as missing.")
         if reference:
             docs.append(
@@ -199,7 +217,8 @@ def new_request_form() -> None:
         "Business justification (for policy exceptions)", value=""
     )
     st.markdown("**Attached documents**")
-    submitted = document_widgets("new")
+    st.caption("Bundled valid examples are pre-attached — uncheck a box to omit one, or upload a file to replace it.")
+    submitted = document_widgets("new", defaults=_sample_document_defaults())
     submitted_documents = st.button("Submit request", type="primary")
 
     if submitted_documents:
