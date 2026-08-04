@@ -5,9 +5,8 @@ intake through document/completeness checks, risk & compliance review, and a
 human-approval gate, before producing a grounded onboarding decision.
 
 Built for: *Project 2 — Multi-Agent Business Workflow Application*
-Presentation: **August 7, ~2:00 PM EST**
 
-Domain: **Option A — Vendor onboarding and risk review**
+Domain:  Vendor onboarding and risk review**
 
 ---
 
