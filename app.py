@@ -217,8 +217,14 @@ def new_request_form() -> None:
         "Business justification (for policy exceptions)", value=""
     )
     st.markdown("**Attached documents**")
-    st.caption("Bundled valid examples are pre-attached — uncheck a box to omit one, or upload a file to replace it.")
-    submitted = document_widgets("new", defaults=_sample_document_defaults())
+    if st.button("Use default sample documents for all"):
+        for doc_value in DOC_LABELS:
+            st.session_state[f"new_has_{doc_value}"] = True
+        st.session_state["new_use_samples"] = True
+        st.rerun()
+    st.caption("Upload a PDF per document below, or click above to attach the bundled valid samples for all of them.")
+    sample_defaults = _sample_document_defaults() if st.session_state.get("new_use_samples") else None
+    submitted = document_widgets("new", defaults=sample_defaults)
     submitted_documents = st.button("Submit request", type="primary")
 
     if submitted_documents:
@@ -322,15 +328,10 @@ def main() -> None:
 
     ensure_environment()
 
-    with st.sidebar:
-        st.header("Environment")
-        st.write(f"DB: `{db.DB_PATH}`")
-        st.write(f"Vector store: `{ingestion.VECTOR_STORE_PATH}`")
-        st.write(f"Policy chunks indexed: `{ingestion.chunk_count()}`")
-        if "active" in st.session_state:
-            if st.button("Start a new request"):
-                del st.session_state["active"]
-                st.rerun()
+    if "active" in st.session_state:
+        if st.button("Start a new request"):
+            del st.session_state["active"]
+            st.rerun()
 
     if "active" not in st.session_state:
         new_request_form()

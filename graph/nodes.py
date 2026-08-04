@@ -188,7 +188,10 @@ def _planner_prompt(state: WorkflowState, flags: list[RiskFlag], path: Recommend
         f"Risk flags identified: {flag_names}. "
         f"Recommended path per rubric: {path.value}. "
         f"Business justification: {state.business_justification or 'none'}. "
-        f"Write a concise 2-3 sentence onboarding recommendation."
+        f"Respond with exactly 2-3 sentences of plain prose explaining the "
+        f"reasoning behind this recommendation. Do not use headings, bullet "
+        f"points, numbered lists, or bold text, and do not restate the fields "
+        f"above as a label/value list — just the reasoning, as flowing sentences."
     )
 
 
@@ -265,7 +268,11 @@ def _reviewer_prompt(state: WorkflowState, verdict_text: str) -> str:
     return (
         f"You are the risk/compliance reviewer. Vendor {state.vendor_name}, "
         f"planner recommendation: {state.planner_recommendation.recommended_path.value}. "
-        f"Verdict: {verdict_text}. Write a concise review note."
+        f"Verdict: {verdict_text}. "
+        f"Respond with exactly 1-2 sentences of plain prose explaining the "
+        f"reasoning behind this verdict. Do not use headings, bullet points, "
+        f"numbered lists, or bold text, and do not restate the vendor name or "
+        f"verdict as a label — just the reasoning, as flowing sentences."
     )
 
 
@@ -428,14 +435,16 @@ def _summary_prompt(state: WorkflowState) -> str:
         outcome = ""
     status = f" Final status: {state.final_status.value}." if state.final_status else ""
     return (
-        f"Write a 3-5 sentence plain-language summary of this vendor onboarding "
-        f"request for a business audience. Vendor: {state.vendor_name} "
-        f"({state.vendor_category.value}, {state.country}). "
+        f"Vendor: {state.vendor_name} ({state.vendor_category.value}, {state.country}). "
         f"Risk flags identified: {flags}. Risk score: {state.risk_score:.0f} "
         f"(escalation threshold {models.ESCALATION_THRESHOLD:.0f}). "
         f"Reviewer decision: {verdict_decision}.{outcome}{status} "
-        f"Explain (1) why the risk score came out the way it did, (2) whether human "
-        f"sign-off was/is required and why or why not, and (3) the outcome so far."
+        f"Respond with exactly 3-4 sentences of plain flowing prose for a "
+        f"business audience, weaving together why the risk score came out the "
+        f"way it did, whether human sign-off was/is required and why, and the "
+        f"outcome so far. Do not use headings, bullet points, numbered lists, "
+        f"or bold text, and do not answer as three separate labeled points —"
+        f" write it as one continuous paragraph."
     )
 
 
