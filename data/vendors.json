@@ -1,0 +1,56 @@
+[
+  {
+    "vendor_id": 1001,
+    "vendor_name": "ABC Office Supply",
+    "vendor_category": "Office Supplies",
+    "country": "US",
+    "vendor_history": "existing",
+    "approved": true,
+    "documents_on_file": [
+      "W9",
+      "Certificate of Insurance",
+      "Business License",
+      "Vendor Code of Conduct"
+    ]
+  },
+  {
+    "vendor_id": 1002,
+    "vendor_name": "CloudNova",
+    "vendor_category": "IT/Software",
+    "country": "US",
+    "vendor_history": "new",
+    "approved": false,
+    "documents_on_file": []
+  },
+  {
+    "vendor_id": 1003,
+    "vendor_name": "EuroTech Solutions",
+    "vendor_category": "IT/Software",
+    "country": "Germany",
+    "vendor_history": "new",
+    "approved": false,
+    "documents_on_file": []
+  },
+  {
+    "vendor_id": 1004,
+    "vendor_name": "Green Logistics",
+    "vendor_category": "Logistics",
+    "country": "Canada",
+    "vendor_history": "existing",
+    "approved": true,
+    "documents_on_file": [
+      "W9",
+      "Certificate of Insurance",
+      "Business License"
+    ]
+  },
+  {
+    "vendor_id": 1005,
+    "vendor_name": "Bright Marketing",
+    "vendor_category": "Marketing",
+    "country": "US",
+    "vendor_history": "new",
+    "approved": false,
+    "documents_on_file": []
+  }
+]

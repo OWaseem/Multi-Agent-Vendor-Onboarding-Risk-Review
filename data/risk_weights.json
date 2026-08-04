@@ -1,0 +1,8 @@
+{
+  "foreign_vendor": 30,
+  "missing_certificate_of_insurance": 20,
+  "missing_security_questionnaire": 30,
+  "watchlist_match": 100,
+  "data_sensitive": 15,
+  "new_vendor": 10
+}

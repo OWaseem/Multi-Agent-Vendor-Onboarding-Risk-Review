@@ -1,0 +1,75 @@
+[
+  {
+    "scenario": "Happy Path",
+    "request_id": 1,
+    "vendor_name": "ABC Office Supply",
+    "vendor_category": "Office Supplies",
+    "country": "US",
+    "data_sensitive": false,
+    "vendor_history": "existing",
+    "submitted_documents": [
+      "W9",
+      "Certificate of Insurance",
+      "Business License",
+      "Vendor Code of Conduct"
+    ]
+  },
+  {
+    "scenario": "Missing Documents",
+    "request_id": 2,
+    "vendor_name": "Bright Marketing",
+    "vendor_category": "Marketing",
+    "country": "US",
+    "data_sensitive": false,
+    "vendor_history": "new",
+    "submitted_documents": [
+      "W9",
+      "Business License"
+    ]
+  },
+  {
+    "scenario": "IT Vendor",
+    "request_id": 3,
+    "vendor_name": "CloudNova",
+    "vendor_category": "IT/Software",
+    "country": "US",
+    "data_sensitive": true,
+    "vendor_history": "new",
+    "submitted_documents": [
+      "W9",
+      "Certificate of Insurance",
+      "Business License",
+      "Vendor Code of Conduct",
+      "Security Questionnaire"
+    ]
+  },
+  {
+    "scenario": "Revision Loop",
+    "request_id": 4,
+    "vendor_name": "CloudNova",
+    "vendor_category": "IT/Software",
+    "country": "US",
+    "data_sensitive": true,
+    "vendor_history": "new",
+    "submitted_documents": [
+      "W9",
+      "Certificate of Insurance",
+      "Business License",
+      "Vendor Code of Conduct",
+      "Security Questionnaire"
+    ]
+  },
+  {
+    "scenario": "Human Review",
+    "request_id": 5,
+    "vendor_name": "EuroTech Solutions",
+    "vendor_category": "IT/Software",
+    "country": "Germany",
+    "data_sensitive": true,
+    "vendor_history": "new",
+    "submitted_documents": [
+      "W9",
+      "Business License"
+    ]
+  }
+]

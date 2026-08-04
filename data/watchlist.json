@@ -1,0 +1,14 @@
+[
+  {
+    "vendor_name": "Eastern Holdings",
+    "reason": "Government Watchlist"
+  },
+  {
+    "vendor_name": "Bad Corp",
+    "reason": "OFAC Sanctions"
+  },
+  {
+    "vendor_name": "SecureNet Global",
+    "reason": "Restricted Entity"
+  }
+]
