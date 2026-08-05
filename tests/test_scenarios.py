@@ -57,6 +57,7 @@ def test_happy_path_standard_onboarding_auto_completes(app, make_request, seeded
     assert out["final_status"] == OnboardingStatus.STANDARD_ONBOARDING
     assert out["workflow_trace"] == [
         "intake",
+        "content_safety_check",
         "gather_evidence",
         "planner",
         "reviewer",
@@ -188,6 +189,7 @@ def test_escalation_foreign_data_sensitive_no_security_questionnaire(app, make_r
     assert RiskFlag.FOREIGN_ENTITY in out["risk_flags"]
     assert RiskFlag.NEW_VENDOR_DATA_SENSITIVE in out["risk_flags"]
     assert out["risk_score"] >= models.ESCALATION_THRESHOLD
+    assert sum(item.points for item in out["risk_score_breakdown"]) == out["risk_score"]
     assert current_interrupt(snap) is not None
 
     # Human gate: rejected.
@@ -243,6 +245,129 @@ def test_policy_retrieval_metadata_filter(app, make_request):
         and c.doc_type == "document_checklist_by_category"
         for c in it_risk
     )
+
+
+def test_content_safety_keyword_scan_detects_threats():
+    """The deterministic keyword baseline (no LLM involved) must catch obvious
+    threatening/violent language and leave ordinary text alone."""
+    import content_safety
+
+    assert content_safety.scan_unsafe_content("We will kill the deal if this isn't approved.")
+    assert not content_safety.scan_unsafe_content("This is a normal business justification.")
+
+
+def test_content_safety_keyword_scan_detects_security_incident():
+    import content_safety
+
+    assert content_safety.scan_security_incident("The vendor had a data breach last year.")
+    assert not content_safety.scan_security_incident("Everything checks out fine.")
+
+
+def test_content_safety_check_node_flags_unsafe_text(monkeypatch):
+    """Node-level check, LLM stubbed out so this only exercises the keyword
+    baseline — the guardrail must not depend on an LLM being configured."""
+    import llm
+    from graph.nodes import content_safety_check
+    from models import WorkflowState
+
+    monkeypatch.setattr(llm, "llm_text", lambda prompt: None)
+    state = WorkflowState(
+        vendor_name="Staple Supply Co.",
+        business_justification="We will kill the deal if this isn't approved by Friday.",
+    )
+    update = content_safety_check(state)
+
+    assert update["unsafe_content_detected"] is True
+    assert update["unsafe_content_reason"]
+    assert update["security_incident_disclosed"] is False
+    assert "content_safety_check" in update["workflow_trace"]
+
+
+def test_content_safety_check_node_clean_text_unflagged(monkeypatch):
+    import llm
+    from graph.nodes import content_safety_check
+    from models import WorkflowState
+
+    monkeypatch.setattr(llm, "llm_text", lambda prompt: None)
+    state = WorkflowState(
+        vendor_name="Staple Supply Co.",
+        business_justification="Standard renewal of an existing office supplies contract.",
+    )
+    update = content_safety_check(state)
+
+    assert update["unsafe_content_detected"] is False
+    assert update["security_incident_disclosed"] is False
+
+
+def test_unsafe_content_flag_forces_reviewer_escalation():
+    """RiskFlag.UNSAFE_CONTENT alone must force an ESCALATE verdict, even on an
+    otherwise clean, low-risk vendor profile — this is the guardrail's whole
+    point: a working reviewer can never silently approve past it."""
+    from graph.nodes import reviewer
+    from models import PlannerRecommendation, RecommendedPath, WorkflowState
+
+    state = WorkflowState(
+        vendor_name="Staple Supply Co.",
+        vendor_category=VendorCategory.OFFICE_SUPPLIES,
+        country="US",
+        relationship_status=RelationshipStatus.EXISTING,
+        submitted_documents=base_documents(),
+        planner_recommendation=PlannerRecommendation(
+            recommended_path=RecommendedPath.STANDARD, reasoning="fine", cited_policy_chunks=[]
+        ),
+        unsafe_content_detected=True,
+    )
+    update = reviewer(state)
+
+    assert update["reviewer_verdict"].decision == ReviewerDecision.ESCALATE
+    assert RiskFlag.UNSAFE_CONTENT in update["risk_flags"]
+
+
+def test_security_incident_flag_recorded_without_forcing_escalation_alone():
+    """A disclosed security incident is a real risk signal (feeds the score)
+    but — unlike unsafe content — isn't an automatic, unconditional escalate
+    trigger on its own; it has to actually push the score over threshold."""
+    from graph.nodes import reviewer
+    from models import PlannerRecommendation, RecommendedPath, WorkflowState
+
+    state = WorkflowState(
+        vendor_name="Staple Supply Co.",
+        vendor_category=VendorCategory.OFFICE_SUPPLIES,
+        country="US",
+        relationship_status=RelationshipStatus.EXISTING,
+        submitted_documents=base_documents(),
+        planner_recommendation=PlannerRecommendation(
+            recommended_path=RecommendedPath.STANDARD, reasoning="fine", cited_policy_chunks=[]
+        ),
+        security_incident_disclosed=True,
+    )
+    update = reviewer(state)
+
+    assert RiskFlag.SECURITY_INCIDENT_DISCLOSED in update["risk_flags"]
+    assert update["risk_score"] == RiskFlag.SECURITY_INCIDENT_DISCLOSED.severity
+
+
+def test_risk_score_breakdown_sums_to_total():
+    """The itemized breakdown must always sum to the same number as
+    risk_score_calculator — the UI shows the former as the receipt for the
+    latter, so they can never drift apart."""
+    from tools import risk_score_breakdown, risk_score_calculator
+
+    flags = [RiskFlag.FOREIGN_ENTITY]
+    category = VendorCategory.IT_SOFTWARE
+    data_sensitive = True
+
+    total = risk_score_calculator(flags, category, data_sensitive)
+    breakdown = risk_score_breakdown(flags, category, data_sensitive)
+
+    assert total == sum(item.points for item in breakdown)
+    labels = {item.label for item in breakdown}
+    assert RiskFlag.FOREIGN_ENTITY.value in labels
+    assert any("category (inherent)" in label for label in labels)
+    assert any("data-sensitive (inherent)" in label for label in labels)
+    # The exact scenario from the live run this feature was requested for:
+    # IT/Software + data-sensitive, zero flags -> 20 + 15 = 35.
+    assert risk_score_calculator([], VendorCategory.IT_SOFTWARE, True) == 35.0
 
 
 def test_revision_cap_auto_escalates_to_human(app):

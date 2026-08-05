@@ -286,6 +286,16 @@ AI engineering is more than prompting an LLM.
 Agent specialization improves maintainability.
 Structured outputs increase reliability.
 Human oversight remains essential in high-stakes workflows.
+Future Enhancements
+Calibrate the risk-scoring rubric against real historical outcomes or an actuarial/compliance framework, instead of the current illustrative weights.
+Upgrade the content-safety guardrail from keyword matching to a dedicated moderation model for more robust detection.
+Add OCR support so document validation also covers scanned/image PDFs, not just digitally-generated ones.
+Move from the in-memory LangGraph checkpointer to a persistent backend so paused or escalated requests survive an app restart.
+Replace the mocked vendor database and sanctions watchlist with live external data sources.
+
+Speaker Notes
+
+"Everything here is a direct extension of a real limitation we identified while building this, not a generic wish list -- for example, we can already show you the exact bug that motivates persistent checkpointing, since we hit it live during development."
 
 # Slide 12 – Questions
 

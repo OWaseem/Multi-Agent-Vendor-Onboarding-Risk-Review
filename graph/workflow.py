@@ -2,7 +2,7 @@
 
 Graph shape::
 
-    START -> intake -> gather_evidence -> planner -> reviewer
+    START -> intake -> content_safety_check -> gather_evidence -> planner -> reviewer
     reviewer: approved -> mock_action -> summarize -> END
               escalate -> open_approval -> human_review
               revise (revision_count <= cap) -> planner
@@ -47,6 +47,7 @@ _MSGPACK_ALLOWLIST = [
         "OnboardingStatus",
         "HumanDecision",
         "RiskFlag",
+        "RiskScoreItem",
         "ApprovalStatus",
     )
 ]
@@ -82,6 +83,7 @@ def _route_human(state: WorkflowState) -> str:
 def build_graph():
     graph = StateGraph(WorkflowState)
     graph.add_node("intake", nodes.intake)
+    graph.add_node("content_safety_check", nodes.content_safety_check)
     graph.add_node("gather_evidence", nodes.gather_evidence)
     graph.add_node("planner", nodes.planner)
     graph.add_node("reviewer", nodes.reviewer)
@@ -92,7 +94,8 @@ def build_graph():
     graph.add_node("summarize", nodes.summarize)
 
     graph.add_edge(START, "intake")
-    graph.add_edge("intake", "gather_evidence")
+    graph.add_edge("intake", "content_safety_check")
+    graph.add_edge("content_safety_check", "gather_evidence")
     graph.add_edge("gather_evidence", "planner")
     graph.add_edge("planner", "reviewer")
 

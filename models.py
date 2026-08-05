@@ -67,6 +67,8 @@ class RiskFlag(str, Enum):
     MISSING_SECURITY_QUESTIONNAIRE = "missing_security_questionnaire"
     ON_WATCHLIST = "on_watchlist"
     NEW_VENDOR_DATA_SENSITIVE = "new_vendor_data_sensitive"
+    UNSAFE_CONTENT = "unsafe_content"
+    SECURITY_INCIDENT_DISCLOSED = "security_incident_disclosed"
 
     @property
     def severity(self) -> int:
@@ -153,7 +155,9 @@ def required_document_types(category: VendorCategory, data_sensitive: bool) -> s
 #: Weight per RiskFlag; higher = more severe. A single on_watchlist hit
 #: (45) exceeds the escalation threshold on its own.
 _RISK_SEVERITY: dict[RiskFlag, int] = {
+    RiskFlag.UNSAFE_CONTENT: 50,
     RiskFlag.ON_WATCHLIST: 45,
+    RiskFlag.SECURITY_INCIDENT_DISCLOSED: 25,
     RiskFlag.MISSING_SECURITY_QUESTIONNAIRE: 20,
     RiskFlag.FOREIGN_ENTITY: 15,
     RiskFlag.NO_COI: 15,
@@ -170,6 +174,36 @@ INHERENT_DATA_SENSITIVE_RISK = 15
 ESCALATION_THRESHOLD = 30.0
 
 
+class RiskScoreItem(BaseModel):
+    """One line item contributing to the risk score — shown in the UI so the
+    total is never just an opaque number."""
+
+    label: str   # e.g. "foreign_entity" or "IT/Software category (inherent)"
+    points: int  # this item's contribution to the total
+
+
+def risk_score_breakdown_for(
+    risk_flags: set[RiskFlag] | list[RiskFlag],
+    vendor_category: VendorCategory,
+    data_sensitive: bool,
+) -> list[RiskScoreItem]:
+    """Line-item breakdown of the risk score: one entry per flag, plus the two
+    inherent category/sensitivity terms. ``risk_score_for`` is just the sum of
+    this list, so the total displayed anywhere is always traceable to these
+    specific contributors."""
+    items = [RiskScoreItem(label=RiskFlag(f).value, points=RiskFlag(f).severity) for f in risk_flags]
+    if vendor_category.is_high_risk_category:
+        items.append(
+            RiskScoreItem(
+                label=f"{vendor_category.value} category (inherent)",
+                points=INHERENT_IT_CATEGORY_RISK,
+            )
+        )
+    if data_sensitive:
+        items.append(RiskScoreItem(label="data-sensitive (inherent)", points=INHERENT_DATA_SENSITIVE_RISK))
+    return items
+
+
 def risk_score_for(
     risk_flags: set[RiskFlag] | list[RiskFlag],
     vendor_category: VendorCategory,
@@ -180,13 +214,9 @@ def risk_score_for(
     ``sum(flag severities) + inherent category/sensitivity risk``. A lone
     foreign_entity flag scores 15 (standard); adding missing security
     questionnaire or data sensitivity crosses the 30 escalation threshold.
+    See ``risk_score_breakdown_for`` for the itemized version of this sum.
     """
-    score = sum(RiskFlag(f).severity for f in risk_flags)
-    if vendor_category.is_high_risk_category:
-        score += INHERENT_IT_CATEGORY_RISK
-    if data_sensitive:
-        score += INHERENT_DATA_SENSITIVE_RISK
-    return float(score)
+    return float(sum(item.points for item in risk_score_breakdown_for(risk_flags, vendor_category, data_sensitive)))
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +313,16 @@ class WorkflowState(BaseModel):
     submitted_documents: list[SubmittedDocument] = Field(default_factory=list)
     missing_documents: list[DocumentType] = Field(default_factory=list)
 
+    # --- content-safety guardrail (scans free-text fields) ---
+    unsafe_content_detected: bool = False
+    unsafe_content_reason: Optional[str] = None
+    security_incident_disclosed: bool = False
+    security_incident_reason: Optional[str] = None
+
     # --- risk & retrieval ---
     risk_flags: list[RiskFlag] = Field(default_factory=list)
     risk_score: float = 0.0
+    risk_score_breakdown: list[RiskScoreItem] = Field(default_factory=list)  # line items summing to risk_score
     vendor_record: Optional[dict] = None  # result of the vendor_lookup tool
     retrieved_policy_chunks: list[PolicyChunk] = Field(default_factory=list)
 

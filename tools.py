@@ -17,7 +17,9 @@ from models import (
     DocumentType,
     PolicyChunk,
     RiskFlag,
+    RiskScoreItem,
     VendorCategory,
+    risk_score_breakdown_for,
     risk_score_for,
 )
 
@@ -71,6 +73,16 @@ def risk_score_calculator(
 ) -> float:
     """Weighted risk score from flags plus inherent category/sensitivity risk."""
     return risk_score_for(risk_flags, vendor_category, data_sensitive)
+
+
+def risk_score_breakdown(
+    risk_flags: list[RiskFlag] | set[RiskFlag],
+    vendor_category: VendorCategory,
+    data_sensitive: bool,
+) -> list[RiskScoreItem]:
+    """Line items (one per flag, plus inherent category/sensitivity terms)
+    that sum to ``risk_score_calculator``'s result — for display, not scoring."""
+    return risk_score_breakdown_for(risk_flags, vendor_category, data_sensitive)
 
 
 # ---------------------------------------------------------------------------
@@ -138,11 +150,16 @@ def evaluate_risk_flags(
     vendor_category: VendorCategory,
     data_sensitive: bool,
     relationship_status: models.RelationshipStatus,
+    unsafe_content_detected: bool = False,
+    security_incident_disclosed: bool = False,
 ) -> list[RiskFlag]:
     """Compute the RiskFlags from a request per the high-risk criteria.
 
     Used by the planner (sans watchlist, which is the reviewer's check) and
-    by the reviewer (with the watchlist).
+    by the reviewer (with the watchlist). ``unsafe_content_detected`` and
+    ``security_incident_disclosed`` come from the content-safety guardrail
+    (``graph.nodes.content_safety_check``), run once at the start of the
+    workflow.
     """
     flags: list[RiskFlag] = []
     if country.upper() != "US":
@@ -157,4 +174,8 @@ def evaluate_risk_flags(
         relationship_status == models.RelationshipStatus.NEW and data_sensitive
     ):
         flags.append(RiskFlag.NEW_VENDOR_DATA_SENSITIVE)
+    if unsafe_content_detected:
+        flags.append(RiskFlag.UNSAFE_CONTENT)
+    if security_incident_disclosed:
+        flags.append(RiskFlag.SECURITY_INCIDENT_DISCLOSED)
     return flags

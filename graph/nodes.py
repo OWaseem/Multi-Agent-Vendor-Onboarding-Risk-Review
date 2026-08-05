@@ -2,19 +2,24 @@
 
 Roles:
 - intake (document completeness, with requester interrupt)
+- content_safety_check (guardrail: screens free text for unsafe content /
+  disclosed security incidents)
 - gather_evidence (vendor lookup + RAG policy retrieval)
 - planner (drafts the recommended onboarding path)
 - reviewer (critic: validates against policy, score, watchlist)
 - open_approval / human_review (human-approval gate via interrupt)
 - mock_action / reject (mocked side-effects + final status writes)
+- summarize (plain-language wrap-up of the whole run)
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langgraph.types import interrupt
 
+import content_safety
 import document_validation
 import llm
 import models
@@ -153,7 +158,85 @@ def _normalize_documents(value: Any) -> list[SubmittedDocument]:
 
 
 # ---------------------------------------------------------------------------
-# 2. Evidence gathering (vendor lookup + RAG policy retrieval)
+# 2. Content-safety guardrail (screens free-text fields)
+# ---------------------------------------------------------------------------
+
+
+def _content_safety_prompt(text: str) -> str:
+    return (
+        "Screen the following vendor-onboarding text for two things: "
+        "(1) whether it contains threats, violence, weapons, or other unsafe "
+        "or harmful content, and (2) whether it discloses a past security "
+        "breach, data breach, hack, or similar security incident. "
+        "Respond with exactly two lines in this format and nothing else:\n"
+        "UNSAFE: yes|no\n"
+        "INCIDENT: yes|no\n\n"
+        f"Text: {text}"
+    )
+
+
+def _parse_content_safety_response(text: str) -> tuple[bool, bool] | None:
+    unsafe_match = re.search(r"UNSAFE:\s*(yes|no)", text, re.IGNORECASE)
+    incident_match = re.search(r"INCIDENT:\s*(yes|no)", text, re.IGNORECASE)
+    if not unsafe_match or not incident_match:
+        return None
+    return (
+        unsafe_match.group(1).lower() == "yes",
+        incident_match.group(1).lower() == "yes",
+    )
+
+
+def content_safety_check(state: WorkflowState) -> dict[str, Any]:
+    """Screen free-text fields for unsafe content and disclosed security incidents.
+
+    A deterministic keyword scan (``content_safety.py``) always runs and is
+    never skipped, regardless of whether an LLM provider is configured — it's
+    the safety net. When a provider *is* configured, an LLM classification
+    pass supplements it for better nuance; either signal flagging something is
+    enough (OR, not AND), so a working LLM can only add coverage, never remove
+    the keyword baseline's protection.
+    """
+    trace = _trace(state, "content_safety_check")
+    text = " ".join(filter(None, [state.vendor_name, state.business_justification]))
+
+    unsafe_hits = content_safety.scan_unsafe_content(text)
+    incident_hits = content_safety.scan_security_incident(text)
+    unsafe = bool(unsafe_hits)
+    incident = bool(incident_hits)
+    reasons = []
+    if unsafe_hits:
+        reasons.append(f"keyword match: {', '.join(unsafe_hits)}")
+    incident_reasons = []
+    if incident_hits:
+        incident_reasons.append(f"keyword match: {', '.join(incident_hits)}")
+
+    if text.strip():
+        try:
+            llm_response = llm.llm_text(_content_safety_prompt(text))
+        except llm.LLMCallError:
+            llm_response = None
+        if llm_response:
+            parsed = _parse_content_safety_response(llm_response)
+            if parsed:
+                llm_unsafe, llm_incident = parsed
+                unsafe = unsafe or llm_unsafe
+                incident = incident or llm_incident
+                if llm_unsafe:
+                    reasons.append("LLM classifier flagged this text as unsafe")
+                if llm_incident:
+                    incident_reasons.append("LLM classifier flagged a disclosed security incident")
+
+    return {
+        "unsafe_content_detected": unsafe,
+        "unsafe_content_reason": "; ".join(reasons) or None,
+        "security_incident_disclosed": incident,
+        "security_incident_reason": "; ".join(incident_reasons) or None,
+        "workflow_trace": trace,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. Evidence gathering (vendor lookup + RAG policy retrieval)
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +259,7 @@ def gather_evidence(state: WorkflowState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 3. Onboarding planner
+# 4. Onboarding planner
 # ---------------------------------------------------------------------------
 
 
@@ -224,6 +307,8 @@ def planner(state: WorkflowState) -> dict[str, Any]:
         relationship_status=(
             RelationshipStatus.EXISTING if not _is_new_vendor(state) else RelationshipStatus.NEW
         ),
+        unsafe_content_detected=state.unsafe_content_detected,
+        security_incident_disclosed=state.security_incident_disclosed,
     )
 
     has_justification = bool(state.business_justification)
@@ -260,17 +345,18 @@ def planner(state: WorkflowState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 4. Risk / compliance reviewer (critic)
+# 5. Risk / compliance reviewer (critic)
 # ---------------------------------------------------------------------------
 
 
-def _reviewer_prompt(state: WorkflowState, verdict_text: str) -> str:
+def _reviewer_prompt(state: WorkflowState, verdict_text: str, breakdown: str) -> str:
     return (
         f"You are the risk/compliance reviewer. Vendor {state.vendor_name}, "
         f"planner recommendation: {state.planner_recommendation.recommended_path.value}. "
-        f"Verdict: {verdict_text}. "
+        f"Risk score line items: {breakdown}. Verdict: {verdict_text}. "
         f"Respond with exactly 1-2 sentences of plain prose explaining the "
-        f"reasoning behind this verdict. Do not use headings, bullet points, "
+        f"reasoning behind this verdict, citing the specific line items that "
+        f"drove the score where relevant. Do not use headings, bullet points, "
         f"numbered lists, or bold text, and do not restate the vendor name or "
         f"verdict as a label — just the reasoning, as flowing sentences."
     )
@@ -289,23 +375,27 @@ def reviewer(state: WorkflowState) -> dict[str, Any]:
         relationship_status=(
             RelationshipStatus.EXISTING if not _is_new_vendor(state) else RelationshipStatus.NEW
         ),
+        unsafe_content_detected=state.unsafe_content_detected,
+        security_incident_disclosed=state.security_incident_disclosed,
     )
     if hits:
         flags.append(RiskFlag.ON_WATCHLIST)
 
     score = tools.risk_score_calculator(flags, state.vendor_category, state.data_sensitive)
+    breakdown = tools.risk_score_breakdown(flags, state.vendor_category, state.data_sensitive)
     rec = state.planner_recommendation.recommended_path
     mandatory_gate = state.vendor_category.is_high_risk_category or state.data_sensitive
 
     if (
         RiskFlag.ON_WATCHLIST in flags
+        or RiskFlag.UNSAFE_CONTENT in flags
         or score >= models.ESCALATION_THRESHOLD
         or mandatory_gate
         or rec == RecommendedPath.NEEDS_EXCEPTION
     ):
         decision, feedback = ReviewerDecision.ESCALATE, (
             "Escalated: requires human sign-off (high risk, watchlist, "
-            "exception, or mandatory IT/data-sensitive review)."
+            "unsafe content, exception, or mandatory IT/data-sensitive review)."
         )
     elif rec == RecommendedPath.HIGH_RISK:
         decision, feedback = ReviewerDecision.REVISE, (
@@ -319,11 +409,14 @@ def reviewer(state: WorkflowState) -> dict[str, Any]:
     verdict_text = (
         f"{decision.value} (risk_score={score:.0f}, revision_count={revision_count})"
     )
-    llm_feedback, llm_error = _llm_text_or_fallback(_reviewer_prompt(state, verdict_text), feedback)
+    llm_feedback, llm_error = _llm_text_or_fallback(
+        _reviewer_prompt(state, verdict_text, _format_breakdown(breakdown)), feedback
+    )
     verdict = ReviewerVerdict(decision=decision, feedback=llm_feedback, risk_score=score)
     update = {
         "risk_flags": flags,
         "risk_score": score,
+        "risk_score_breakdown": breakdown,
         "reviewer_verdict": verdict,
         "revision_count": revision_count,
         "workflow_trace": trace,
@@ -334,7 +427,7 @@ def reviewer(state: WorkflowState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 5. Human-approval gate
+# 6. Human-approval gate
 # ---------------------------------------------------------------------------
 
 
@@ -386,7 +479,7 @@ def human_review(state: WorkflowState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 6. Terminal side-effect nodes (mocked)
+# 7. Terminal side-effect nodes (mocked)
 # ---------------------------------------------------------------------------
 
 
@@ -420,12 +513,22 @@ def reject(state: WorkflowState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 7. Final summary
+# 8. Final summary
 # ---------------------------------------------------------------------------
 
 
+def _format_breakdown(items: list[models.RiskScoreItem]) -> str:
+    if not items:
+        return "none"
+    return ", ".join(f"{item.label} (+{item.points})" for item in items)
+
+
+def _breakdown_text(state: WorkflowState) -> str:
+    return _format_breakdown(state.risk_score_breakdown)
+
+
 def _summary_prompt(state: WorkflowState) -> str:
-    flags = ", ".join(f.value for f in state.risk_flags) or "none"
+    breakdown = _breakdown_text(state)
     verdict_decision = state.reviewer_verdict.decision.value if state.reviewer_verdict else "n/a"
     if state.human_decision:
         outcome = f" A human reviewer chose to {state.human_decision.value} it."
@@ -436,23 +539,24 @@ def _summary_prompt(state: WorkflowState) -> str:
     status = f" Final status: {state.final_status.value}." if state.final_status else ""
     return (
         f"Vendor: {state.vendor_name} ({state.vendor_category.value}, {state.country}). "
-        f"Risk flags identified: {flags}. Risk score: {state.risk_score:.0f} "
+        f"Risk score line items: {breakdown}. Total risk score: {state.risk_score:.0f} "
         f"(escalation threshold {models.ESCALATION_THRESHOLD:.0f}). "
         f"Reviewer decision: {verdict_decision}.{outcome}{status} "
         f"Respond with exactly 3-4 sentences of plain flowing prose for a "
         f"business audience, weaving together why the risk score came out the "
-        f"way it did, whether human sign-off was/is required and why, and the "
-        f"outcome so far. Do not use headings, bullet points, numbered lists, "
-        f"or bold text, and do not answer as three separate labeled points —"
-        f" write it as one continuous paragraph."
+        f"way it did — cite the specific line items and their point values — "
+        f"whether human sign-off was/is required and why, and the outcome so "
+        f"far. Do not use headings, bullet points, numbered lists, or bold "
+        f"text, and do not answer as three separate labeled points — write it "
+        f"as one continuous paragraph."
     )
 
 
 def _fallback_summary(state: WorkflowState) -> str:
-    flags = ", ".join(f.value for f in state.risk_flags) or "none identified"
+    breakdown = _breakdown_text(state)
     lines = [
         f"{state.vendor_name} ({state.vendor_category.value}, {state.country}) "
-        f"scored a risk score of {state.risk_score:.0f}, driven by: {flags}."
+        f"scored a risk score of {state.risk_score:.0f}, made up of: {breakdown}."
     ]
     if state.requires_human_review:
         reason = state.reviewer_verdict.feedback if state.reviewer_verdict else ""

@@ -469,6 +469,21 @@ def render_planner_and_verdict(state_values) -> None:
         if feedback:
             body_text(feedback)
 
+        breakdown = state_values.get("risk_score_breakdown") or []
+        if breakdown:
+            st.markdown('<div class="vp-panel-rule"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="vp-panel-head">Score breakdown</div>', unsafe_allow_html=True)
+            rows = []
+            for item in breakdown:
+                label = item.label if hasattr(item, "label") else item.get("label")
+                points = item.points if hasattr(item, "points") else item.get("points")
+                rows.append(
+                    '<div class="vp-doc"><span class="vp-doc-dot"></span>'
+                    f'<span class="vp-doc-name">{html.escape(str(label))}</span>'
+                    f'<span class="vp-doc-tag">+{points}</span></div>'
+                )
+            st.markdown("".join(rows), unsafe_allow_html=True)
+
 
 def render_summary(state_values) -> None:
     summary = state_values.get("final_summary")
@@ -482,6 +497,16 @@ def render_llm_error(state_values) -> None:
     error = state_values.get("llm_error")
     if error:
         st.error(f"The LLM provider call failed, so this run used template text instead. {error}")
+
+
+def render_content_safety_warning(state_values) -> None:
+    """Guardrail banner: unsafe content or a disclosed security incident in free text."""
+    if state_values.get("unsafe_content_detected"):
+        reason = state_values.get("unsafe_content_reason") or "no reason recorded"
+        st.error(f"Guardrail: unsafe content detected in this request's text ({reason}). This forces human review.")
+    if state_values.get("security_incident_disclosed"):
+        reason = state_values.get("security_incident_reason") or "no reason recorded"
+        st.warning(f"Guardrail: this request's text discloses a possible security incident ({reason}).")
 
 
 def render_outcome(state_values) -> None:
@@ -615,6 +640,15 @@ def new_request_form() -> None:
     stage_rail(0)
     stage_status("Draft - not submitted")
 
+    # Every widget below is keyed with this generation number. "Start a new
+    # request" bumps it (see the entrypoint), which gives every widget a key
+    # it has never used before - the only reliable way to reset a
+    # file_uploader, and it resets the text/checkbox fields the same way a
+    # true first launch would, instead of Streamlit replaying whatever was
+    # last typed/checked/uploaded from the previous request.
+    gen = st.session_state.get("form_generation", 0)
+    prefix = f"new_{gen}"
+
     left, right = st.columns([2.1, 1], gap="medium")
     panel = right.container()
 
@@ -626,20 +660,33 @@ def new_request_form() -> None:
         with st.container(border=True):
             card_title("Who and what")
             c1, c2 = st.columns(2)
-            vendor_name = c1.text_input("Vendor name", value="Staple Supply Co.")
-            requester_name = c2.text_input("Requester name", value="Alice Johnson")
-            category = c1.selectbox("Category", list(CATEGORY_LABELS), key="form_category")
-            department = c2.text_input("Department", value="Operations")
+            vendor_name = c1.text_input(
+                "Vendor name", value="Staple Supply Co.", key=f"{prefix}_vendor_name"
+            )
+            requester_name = c2.text_input(
+                "Requester name", value="Alice Johnson", key=f"{prefix}_requester_name"
+            )
+            category = c1.selectbox(
+                "Category", list(CATEGORY_LABELS), key=f"{prefix}_category"
+            )
+            department = c2.text_input(
+                "Department", value="Operations", key=f"{prefix}_department"
+            )
 
         with st.container(border=True):
             card_title("Risk profile")
             c3, c4 = st.columns(2)
-            country = c3.text_input("Country of operation", value="US")
+            country = c3.text_input(
+                "Country of operation", value="US", key=f"{prefix}_country"
+            )
             relationship = c4.selectbox(
-                "Relationship", [r.value for r in RelationshipStatus], key="form_relationship"
+                "Relationship",
+                [r.value for r in RelationshipStatus],
+                key=f"{prefix}_relationship",
             )
             data_sensitive = st.checkbox(
-                "Touches company or customer data, or IT systems", key="form_data_sensitive"
+                "Touches company or customer data, or IT systems",
+                key=f"{prefix}_data_sensitive",
             )
             if data_sensitive:
                 callout(
@@ -648,25 +695,29 @@ def new_request_form() -> None:
                     "and a written justification required.",
                 )
             business_justification = st.text_area(
-                "Business justification (for policy exceptions)", value="", height=90
+                "Business justification (for policy exceptions)",
+                value="",
+                height=90,
+                key=f"{prefix}_business_justification",
             )
 
         with st.container(border=True):
             doc_slot = st.container()
             st.markdown('<div class="vp-panel-rule"></div>', unsafe_allow_html=True)
             with st.expander("Add or replace documents"):
+                use_samples_key = f"{prefix}_use_samples"
                 if st.button("Attach the bundled sample set"):
                     for doc_value in DOC_LABELS:
-                        st.session_state[f"new_has_{doc_value}"] = True
-                    st.session_state["new_use_samples"] = True
+                        st.session_state[f"{prefix}_has_{doc_value}"] = True
+                    st.session_state[use_samples_key] = True
                     st.rerun()
                 render_sample_downloads()
                 defaults = (
                     _sample_document_defaults()
-                    if st.session_state.get("new_use_samples")
+                    if st.session_state.get(use_samples_key)
                     else None
                 )
-                submitted = document_widgets("new", defaults=defaults)
+                submitted = document_widgets(prefix, defaults=defaults)
             # Rendered into a slot above the expander so the status list reads
             # first, even though the widgets that produce it run afterwards.
             with doc_slot:
@@ -860,6 +911,7 @@ def main() -> None:
     stage_rail(current_stage(state_values, snap))
     stage_status(f"{request.vendor_name} - {request.vendor_category.value} - {request.country}")
     render_llm_error(state_values)
+    render_content_safety_warning(state_values)
 
     intr = current_interrupt(snap)
     if intr:
@@ -875,6 +927,11 @@ def main() -> None:
             if st.button("Start a new request", use_container_width=True):
                 for key in ("active", "snap", "out", "thread_id"):
                     st.session_state.pop(key, None)
+                # Bump the form generation so every widget on the next
+                # new_request_form() render gets a key it has never used
+                # before, instead of Streamlit replaying the previous
+                # request's typed/checked/uploaded values.
+                st.session_state["form_generation"] = st.session_state.get("form_generation", 0) + 1
                 st.rerun()
     else:
         st.info("Running the next step.")
