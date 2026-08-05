@@ -1,0 +1,5 @@
+Name,Role,Responsibilities
+Vinay Joshi,Risk & Compliance Engine,"Weighted risk-scoring rubric and flag system, sanctions/watchlist checks, content-safety guardrail (threat and security-incident screening), escalation/human-review routing rules"
+Omar Waseem,Multi-Agent Orchestration & Workflow,"LangGraph state machine (intake -> planner -> reviewer -> human gate -> summarize), shared workflow state schema, conditional routing, interrupt/resume mechanics for missing-info and human-approval pauses"
+Jimson James,Document Intelligence & RAG,"PDF document validation and per-type schemas, policy knowledge base, RAG retrieval pipeline (chunking, embeddings, metadata-filtered retrieval)"
+Brandon Calero,"Application, Data & Testing","Streamlit UI, mocked persistence layer (vendor DB, watchlist, approval/status logs), multi-provider LLM integration with deterministic fallback, automated test suite"
