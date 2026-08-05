@@ -37,7 +37,7 @@ Speaker Notes
 # Slide 3 – Our Solution (1.5 min)
 AI-Powered Multi-Agent Workflow
 
-Instead of asking one AI model to complete every task, we divided the work among multiple specialized agents.
+Instead of asking one AI model to complete every task, we divided the work among multiple specialized agents, coordinated by a LangGraph state machine.
 
 Benefits include:
 
@@ -49,92 +49,103 @@ Easier maintenance
 Enterprise scalability
 Speaker Notes
 
-"Each agent has one responsibility and focuses only on that task. This follows good software engineering principles because each component has a single responsibility. If we need to improve risk assessment later, we only update the Risk Agent without affecting the rest of the workflow."
+"Each agent has one responsibility and focuses only on that task. This follows good software engineering principles because each component has a single responsibility. If we need to improve risk assessment later, we only update the Risk/Compliance Reviewer without affecting the rest of the workflow."
 
 # Slide 4 – System Architecture (2 min)
-               User
-                 │
-                 ▼
-         Orchestrator Agent
-                 │
-    ┌────────┬─────────┬────────┐
-    ▼        ▼         ▼        ▼
-Research   Risk     Approval  Reporter
- Agent     Agent      Agent     Agent
-    │        │          │         │
-    └────────┴──────────┴─────────┘
-                 │
-                 ▼
-          Final Decision
+                 Requester
+                     │
+                     ▼
+      Intake Agent (documents + format check)
+                     │
+                     ▼
+   Evidence Gathering (vendor lookup + RAG policy retrieval)
+                     │
+                     ▼
+              Onboarding Planner
+                     │
+                     ▼
+          Risk / Compliance Reviewer
+        │            │             │
+    approved      revise       escalate /
+        │       (loops back    exception
+        │        to Planner)       │
+        ▼                          ▼
+   Mock Action                Human Review
+        │                          │
+        └────────────┬─────────────┘
+                      ▼
+             Summarizer (final report)
+
 Responsibilities
 
-Orchestrator
+LangGraph (orchestration layer)
 
-Coordinates the entire workflow.
+Coordinates node execution and conditional routing (approve / revise / escalate) as a compiled state graph — this is the workflow engine itself, not a separate agent.
 
-Research Agent
+Intake / Document-Completeness Agent
 
-Collects vendor information.
+Checks the submission against the required-document checklist and validates each document's format/fields.
 
-Risk Agent
+Onboarding Planner
 
-Evaluates financial, compliance, and security risk.
+Looks up the vendor record and retrieves relevant policy via RAG, then drafts a recommended path (standard / high-risk / needs-exception).
 
-Approval Agent
+Risk / Compliance Reviewer
 
-Applies deterministic business rules.
+Computes a risk score, checks the sanctions watchlist, and validates the planner's recommendation: approves, sends back for revision, or escalates to a human.
 
-Reporter
+Summarizer
 
-Creates the final audit-ready report.
+Drafts a plain-language wrap-up of the decision (why the risk score is what it is, whether human sign-off was needed, and the outcome) — the audit-ready report.
 
 Speaker Notes
 
-Spend about 20–30 seconds explaining each agent and emphasize that the orchestrator coordinates the workflow while each specialist agent focuses on one domain.
+Spend about 20–30 seconds explaining each stage and emphasize that LangGraph handles coordination/routing itself, while each specialist agent focuses on one domain.
 
 # Slide 5 – End-to-End Workflow (2 min)
 Step 1
 
-User submits a vendor.
+Requester submits a vendor request with supporting documents.
 
 ↓
 
 Step 2
 
-The Orchestrator starts the review.
+Intake Agent checks document completeness and format; pauses and asks the requester if anything is missing or invalid.
 
 ↓
 
 Step 3
 
-The Research Agent gathers company information.
+Evidence Gathering runs automatically: vendor lookup plus a metadata-filtered RAG search over the policy vector store.
 
 ↓
 
 Step 4
 
-The Risk Agent evaluates:
-
-Financial risk
-Compliance
-Security
-Sanctions
+Onboarding Planner drafts a recommended path based on the vendor record and retrieved policy.
 
 ↓
 
 Step 5
 
-The Approval Agent determines whether to:
+Risk / Compliance Reviewer evaluates:
 
-Approve
-Escalate
-Reject
+Risk score (financial/category/data-sensitivity weighting)
+Sanctions watchlist
+Compliance policy fit
 
 ↓
 
 Step 6
 
-The Reporter creates the final report.
+Reviewer decides: approve, send back to the Planner for revision, or escalate to a human reviewer.
+
+↓
+
+Step 7
+
+Summarizer produces the final plain-language report explaining the decision.
 
 Speaker Notes
 
@@ -148,25 +159,25 @@ Multi-Agent Architecture
 
 Breaking one complex task into multiple specialized AI agents.
 
-Agent Orchestration
+Graph-Based Orchestration
 
-Managing communication between agents.
+LangGraph manages state and conditional routing between nodes as a compiled graph, rather than a separate coordinator agent passing messages.
 
 Structured Outputs
 
-Passing structured JSON instead of free-form text.
+Passing structured JSON (Pydantic models) instead of free-form text.
 
 State Management
 
-Keeping track of workflow progress.
+Keeping track of workflow progress across every node, with a full audit trail.
 
 Human-in-the-Loop
 
-Escalating medium- and high-risk vendors to human reviewers.
+Escalating medium- and high-risk vendors to human reviewers via a LangGraph interrupt.
 
 Explainability
 
-Producing transparent reports with supporting evidence.
+Producing transparent, plain-language reasoning with supporting evidence at every stage.
 
 Speaker Notes
 
@@ -175,18 +186,21 @@ Speaker Notes
 # Slide 7 – Technology Stack (1.5 min)
 Languages
 Python
-AI
-Large Language Models
-Multi-Agent System
+Orchestration
+LangGraph (state machine, conditional routing, interrupts/resume)
+AI / LLMs
+Amazon Bedrock (Claude), with OpenAI, Anthropic, and Google Gemini as pluggable fallbacks; deterministic template fallback when no provider is configured
+Retrieval (RAG)
+Chroma vector store, sentence-transformers embeddings, category-aware metadata filtering
 Data Validation
-Pydantic
-Structured JSON
+Pydantic (schemas, structured outputs), pypdf (document format validation)
+Interface
+Streamlit
 Development
-Git
-GitHub
+Git, GitHub
 Software Engineering
 Modular architecture
-Agent communication
+Graph-based orchestration
 State management
 Deterministic business rules
 Speaker Notes
@@ -196,11 +210,11 @@ Explain that the project combines traditional software engineering with AI rathe
 # Slide 8 – Engineering Challenges (2 min)
 Challenge 1
 
-Coordinating multiple agents.
+Coordinating multiple agents and routing.
 
 Solution:
 
-The Orchestrator manages communication.
+LangGraph's compiled state graph manages node execution order and conditional routing (approve/revise/escalate) automatically.
 
 Challenge 2
 
@@ -208,7 +222,7 @@ Keeping outputs consistent.
 
 Solution:
 
-Structured JSON and schema validation.
+Structured JSON and Pydantic schema validation.
 
 Challenge 3
 
@@ -216,7 +230,7 @@ Reducing hallucinations.
 
 Solution:
 
-Deterministic approval rules instead of relying solely on LLM reasoning.
+Deterministic approval rules (risk score + watchlist) instead of relying solely on LLM reasoning; the LLM only generates explanatory prose.
 
 Challenge 4
 
@@ -224,7 +238,7 @@ Creating audit trails.
 
 Solution:
 
-Generate detailed reports documenting each decision.
+Every decision is persisted (approval requests + vendor status log) and explained in a generated plain-language report.
 
 Speaker Notes
 
@@ -238,35 +252,34 @@ More consistent decisions
 Better compliance
 Easier auditing
 Scalable architecture
+Policy-grounded reasoning (RAG already implemented, not just planned)
 Future Improvements
 Live sanctions APIs
 Financial data integrations
-RAG with company policies
 Enterprise authentication
 Dashboard analytics
 Workflow notifications
 Speaker Notes
 
-Explain how this project could evolve into a production-ready enterprise system with integrations and richer data sources.
+Explain how this project could evolve into a production-ready enterprise system with integrations and richer data sources. Note that RAG-grounded policy retrieval is already built and running today — it's listed under Benefits, not Future Improvements.
 
 # Slide 10 – Demo (2–3 min)
 
 Show:
 
-Enter vendor information.
-Start the workflow.
-Display agent coordination.
-Show risk assessment.
-Show approval decision.
-Display the final report.
+Enter vendor information, or use the bundled sample documents button to attach valid example PDFs.
+Start the workflow and show the workflow trace.
+Show the risk score and reviewer decision.
+If escalated, approve or reject at the human review gate.
+Display the final plain-language summary report.
 
-Narrate which agent is active at each stage so the audience can connect the architecture to the live application.
+Narrate which node is active at each stage so the audience can connect the architecture to the live application.
 
 # Slide 11 – Key Takeaways (1 min)
 What We Built
 Enterprise AI workflow
-Multi-agent architecture
-Automated vendor review
+Multi-agent architecture with LangGraph orchestration
+Automated vendor review, including document format validation
 Explainable AI decisions
 What We Learned
 AI engineering is more than prompting an LLM.
