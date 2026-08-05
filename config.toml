@@ -1,0 +1,9 @@
+[theme]
+base = "dark"
+
+# Palette: #533747 · #5F506B · #6A6B83 · #76949F · #86BBBD
+primaryColor = "#86BBBD"              # accent: focus rings, sliders, spinners
+backgroundColor = "#1E161C"           # darkened #533747
+secondaryBackgroundColor = "#2B2130"  # cards, sidebar, table rows
+textColor = "#ECF2F2"
+font = "sans serif"
