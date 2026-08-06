@@ -500,10 +500,28 @@ def render_llm_error(state_values) -> None:
 
 
 def render_content_safety_warning(state_values) -> None:
-    """Guardrail banner: unsafe content or a disclosed security incident in free text."""
+    """Guardrail banner: unsafe content or a disclosed security incident in free text.
+
+    The consequence line depends on the actual reviewer outcome: unsafe
+    content always escalates UNLESS the risk score also crosses
+    AUTO_REJECT_THRESHOLD, in which case it auto-rejects with no human
+    review instead — so the banner can't just always say "forces human
+    review," or it'd be wrong for the auto-reject case.
+    """
     if state_values.get("unsafe_content_detected"):
         reason = state_values.get("unsafe_content_reason") or "no reason recorded"
-        st.error(f"Guardrail: unsafe content detected in this request's text ({reason}). This forces human review.")
+        verdict = state_values.get("reviewer_verdict")
+        decision = None
+        if verdict is not None:
+            raw = verdict.decision if hasattr(verdict, "decision") else verdict.get("decision")
+            decision = getattr(raw, "value", raw)
+        if decision == "rejected":
+            consequence = "This resulted in automatic rejection — no human review."
+        elif decision == "escalate":
+            consequence = "This forces human review."
+        else:
+            consequence = "This will factor into risk scoring and review routing."
+        st.error(f"Guardrail: unsafe content detected in this request's text ({reason}). {consequence}")
     if state_values.get("security_incident_disclosed"):
         reason = state_values.get("security_incident_reason") or "no reason recorded"
         st.warning(f"Guardrail: this request's text discloses a possible security incident ({reason}).")
@@ -806,10 +824,19 @@ def handle_missing_documents(state_values, snap) -> None:
                     )
         with st.container(border=True):
             card_title("Provide the missing files", "Add what is missing and re-upload anything rejected.")
+            use_samples_key = "resume_use_samples"
+            if st.button("Attach the bundled sample set"):
+                for doc_value in DOC_LABELS:
+                    st.session_state[f"resume_has_{doc_value}"] = True
+                st.session_state[use_samples_key] = True
+                st.rerun()
             render_sample_downloads()
-            submitted_now = document_widgets(
-                "resume", defaults=state_values.get("submitted_documents", [])
+            defaults = (
+                _sample_document_defaults()
+                if st.session_state.get(use_samples_key)
+                else state_values.get("submitted_documents", [])
             )
+            submitted_now = document_widgets("resume", defaults=defaults)
             if st.button("Resubmit documents", type="primary"):
                 app = st.session_state["app"]
                 thread_id = st.session_state["thread_id"]

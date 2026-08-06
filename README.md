@@ -66,13 +66,21 @@ Compliance Reviewer against retrieved policy):
 when a vendor fails a standard criterion but the requester has provided a
 credible business justification — this still requires human sign-off.
 
+**Automatic rejection:** if the risk score reaches `AUTO_REJECT_THRESHOLD`
+(65) or higher, the reviewer rejects the vendor immediately — no human
+review. This applies unconditionally, even overriding what would otherwise
+be a watchlist-hit or unsafe-content escalation. The threshold sits above
+the "Helios Data Partners" escalation demo vendor's score (60) so that
+scenario keeps demonstrating human escalation, not auto-rejection.
+
 **Outcomes:**
 
 ```text
 Standard onboarding (auto-completes)
 Missing information — paused, awaiting requester
 Escalated to human review (high-risk / exception / retry limit hit)
-Rejected
+Automatically rejected (risk score >= 65, no human review)
+Rejected (by a human at the approval gate)
 ```
 
 ---
@@ -272,6 +280,7 @@ tests/                 pytest scenarios
 | 4 | Revision loop | **Firstline Facilities GmbH**, Facilities, Germany, existing, all 4 base docs |
 | 5 | Escalation → human gate | **Helios Data Partners**, IT/Software, Germany, data-sensitive, new, base docs only (add security questionnaire when asked) |
 | bonus | Watchlist → escalate | **Blackrock Shipping LLC**, any category, complete docs |
+| bonus | Auto-reject (no human) | **Blackrock Shipping LLC**, IT/Software, Germany, existing, all 4 base docs + security questionnaire — score 80, auto-rejects with no human gate |
 
 Each document checkbox reveals a real file uploader (`.pdf` only). Use the
 "Need example documents?" expander above the form to download a valid sample

@@ -386,7 +386,15 @@ def reviewer(state: WorkflowState) -> dict[str, Any]:
     rec = state.planner_recommendation.recommended_path
     mandatory_gate = state.vendor_category.is_high_risk_category or state.data_sensitive
 
-    if (
+    if score >= models.AUTO_REJECT_THRESHOLD:
+        # Applies unconditionally — even over a watchlist hit or unsafe-content
+        # flag, which would otherwise route to human escalation below.
+        decision, feedback = ReviewerDecision.REJECTED, (
+            f"Automatically rejected: risk score {score:.0f} meets or exceeds "
+            f"the auto-reject threshold ({models.AUTO_REJECT_THRESHOLD:.0f}); "
+            f"no human review is performed at this tier."
+        )
+    elif (
         RiskFlag.ON_WATCHLIST in flags
         or RiskFlag.UNSAFE_CONTENT in flags
         or score >= models.ESCALATION_THRESHOLD
@@ -504,10 +512,15 @@ def mock_action(state: WorkflowState) -> dict[str, Any]:
 
 
 def reject(state: WorkflowState) -> dict[str, Any]:
-    """Record the rejected outcome."""
+    """Record the rejected outcome — either a human rejection at the gate, or
+    an automatic rejection when the reviewer hit AUTO_REJECT_THRESHOLD."""
     trace = _trace(state, "reject")
+    if state.human_decision == HumanDecision.REJECT:
+        notes = "human rejected"
+    else:
+        notes = f"auto-rejected: risk_score={state.risk_score:.0f}"
     tools.update_vendor_status(
-        state.request_id, state.vendor_name, OnboardingStatus.REJECTED, notes="human rejected"
+        state.request_id, state.vendor_name, OnboardingStatus.REJECTED, notes=notes
     )
     return {"final_status": OnboardingStatus.REJECTED, "workflow_trace": trace}
 

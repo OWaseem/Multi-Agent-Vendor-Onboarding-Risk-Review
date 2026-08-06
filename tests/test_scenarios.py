@@ -347,6 +347,31 @@ def test_security_incident_flag_recorded_without_forcing_escalation_alone():
     assert update["risk_score"] == RiskFlag.SECURITY_INCIDENT_DISCLOSED.severity
 
 
+def test_auto_reject_at_score_65_bypasses_human_review(app, make_request):
+    """Score >= AUTO_REJECT_THRESHOLD (65) must reject automatically, with no
+    human gate at all — even when a watchlist hit alone would otherwise force
+    escalation instead. Applies unconditionally, per explicit product decision."""
+    assert watchlist_check("Blackrock Shipping LLC")
+
+    req = make_request(
+        vendor_name="Blackrock Shipping LLC",
+        vendor_category=VendorCategory.IT_SOFTWARE,
+        country="Germany",  # foreign (+15) + IT category inherent (+20) + watchlist (+45) = 80
+        relationship_status=RelationshipStatus.EXISTING,
+        submitted_documents=base_documents([DocumentType.SECURITY_QUESTIONNAIRE]),
+    )
+    out, snap = drive(app, req)
+
+    assert workflow_complete(snap)
+    assert out["reviewer_verdict"].decision == ReviewerDecision.REJECTED
+    assert out["risk_score"] == 80.0
+    assert out["risk_score"] >= models.AUTO_REJECT_THRESHOLD
+    assert out["final_status"] == OnboardingStatus.REJECTED
+    assert out["human_decision"] is None
+    assert "human_review" not in out["workflow_trace"]
+    assert "reject" in out["workflow_trace"]
+
+
 def test_risk_score_breakdown_sums_to_total():
     """The itemized breakdown must always sum to the same number as
     risk_score_calculator — the UI shows the former as the receipt for the

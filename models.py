@@ -90,6 +90,7 @@ class ReviewerDecision(str, Enum):
     APPROVED = "approved"
     REVISE = "revise"
     ESCALATE = "escalate"
+    REJECTED = "rejected"  # automatic, no human review — see AUTO_REJECT_THRESHOLD
 
 
 class ApprovalStatus(str, Enum):
@@ -172,6 +173,12 @@ INHERENT_DATA_SENSITIVE_RISK = 15
 #: Below this score the reviewer may approve a standard path; at/above this
 #: score the reviewer escalates to human review.
 ESCALATION_THRESHOLD = 30.0
+
+#: At/above this score the reviewer automatically rejects — no human review,
+#: applies unconditionally (even over a watchlist hit or unsafe-content flag).
+#: Deliberately above 60: the "Helios Data Partners" escalation demo scenario
+#: scores exactly 60, and must stay in the escalate tier, not auto-reject.
+AUTO_REJECT_THRESHOLD = 65.0
 
 
 class RiskScoreItem(BaseModel):

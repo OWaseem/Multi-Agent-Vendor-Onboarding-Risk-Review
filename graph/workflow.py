@@ -4,6 +4,7 @@ Graph shape::
 
     START -> intake -> content_safety_check -> gather_evidence -> planner -> reviewer
     reviewer: approved -> mock_action -> summarize -> END
+              rejected (risk_score >= AUTO_REJECT_THRESHOLD) -> reject -> summarize -> END
               escalate -> open_approval -> human_review
               revise (revision_count <= cap) -> planner
               revise (revision_count > cap) -> open_approval
@@ -67,6 +68,8 @@ def _route_reviewer(state: WorkflowState) -> str:
     decision = state.reviewer_verdict.decision
     if decision == ReviewerDecision.APPROVED:
         return "mock_action"
+    if decision == ReviewerDecision.REJECTED:
+        return "reject"
     if decision == ReviewerDecision.ESCALATE:
         return "open_approval"
     if state.revision_count > REVISION_CAP:
